@@ -1,0 +1,124 @@
+00001MBB0001I 001 &a1&
+00002MBB0002E 001 システムエラー [file_open] : &a1& cannot open.
+00003MBB0003E 001 システムエラー [file_read] : &a1& read failure.
+00004MBB0004E 001 システムエラー [file_write] : &a1& write failure (data : &a2&).
+00005MBB0005E 001 システムエラー [file_delete] : &a1& cannot delete.
+00006MBB0006E 001 システムエラー [file_close] : &a1& cannot close.
+00007MBB0007E 001 システムエラー [msg_send] : message send failure (&a1& :data = &a2&).
+00008MBB0008E 001 システムエラー [msg_recv] : message recv failure (&a1&).
+00009MBB0009E 001 システムエラー [shmat] : SHM cannot attach (SHMID : &a1&/file : &a2&).
+00010MBB0010E 001 システムエラー [shmget] : SHM connect failure(file : &a1&).
+00011MBB0011E 001 システムエラー [shmctl] : SHM control failure(file : &a1&).
+00012MBB0012E 001 システムエラー [shmdt] : SHM cannot detach.(file : &a1&).
+00013MBB0013E 001 システムエラー [ftok] : get key failure (file :  &a1&/id : &a2&).
+00014MBB0014E 001 システムエラー [fork] : fork failure.
+00015MBB0015E 001 システムエラー [exec] : exec failure (process : &a1&).
+00016MBB0016E 001 システムエラー [msgget] : get msgid failure (key : &a1).
+00017MBB0017E 001 システムエラー [msgctrl] : message control failure.
+00018MBB0018E 001 システムエラー [calloc] : memory allocate failure (size = &a1&bytes).
+00019MBB0019E 001 システムエラー [malloc] : &a1& allocate failure (size = &a2&bytes).
+00020MBB0020E 001 システムエラー [poll] : wait events failure (event = &a1&).
+00021MBB0021E 001 システムエラー [queue_open] : QUEUE cannot open (queue : &a1&).
+00022MBB0022E 001 システムエラー [Start_Station_Err] : start station failure.
+00023MBB0023E 001 システムエラー [Abort_Station] : station aborted.
+00024MBB0024E 001 システムエラー [Station_Not_Found] : station not found.
+00025MBB0025I 001 Errlog statoin start
+00026MBB0026I 001 Errlog station terminate
+00027MBB0027E 001 システムエラー [Invalid_Parameter] : invalid parameter(parameter : &a1&).
+00028MBB0028E 001 システムエラー [Invalid_Command] : invalid command(command : &a1&).
+00029MBB0029E 001 システムエラー [Over_Data] : file overflow (data : &a1&).
+00030MBB0030E 001 システムエラー [opendir] : DIRECTORY cannot open.
+00031MBB0031I 001 Errlog station change output terminal
+00032MBB0032E 001 システムエラー [system] : ( &a1& ) execution failed.
+00033MBB0033E 001 システムエラー [file_empty] : ( &a1& ) empty.
+00034MBB0034E 001 システムエラー [chdir] : Directory not found at change directory (directory : &a1&).
+00035MBB0035E 001 システムエラー [mkdir] : Directory do not create (directory : &a1&).
+00036MBB0036E 001 システムエラー [coredir] : Change current directory failure ( home : &a1& ).
+00037MBB0037E 001 システムエラー [getenv] : cannot get &a1&.
+00038MBB0038E 001 データベースへの接続に失敗しました．
+00039MBB0039E 001 データベースエラー sqlcode = &a1&, position = &a2&
+00040MBB0040I 001 Start process : &a1& を開始しました.
+00041MBB0041I 001 Stop process  : &a1& を終了しました.
+00042MBB0042E 001 システムエラー [lpr_error] : lpr failure ( file = &a1& )
+00043MBB0043E 001 システムエラー [putenv] : cannot put &a1&.
+00044MBB0044I 001 [SQL Statment] : &a1&
+00045MBB0045E 001 Error process  : &a1& が異常終了しました.
+00046MBB0046E 001 システムエラー [cp] : &a1& のコピーにてエラーが発生しました.
+00047MBB0047E 001 システムエラー [mv] : &a1& の移動にてエラーが発生しました.
+00048MBB0048E 001 システムエラー [rm] : &a1& の削除にてエラーが発生しました.
+00049MBB0049E 001 システムエラー [tar] : &a1& のアーカイブにてエラーが発生しました.
+00050MBB0050E 001 システムエラー [compress] : &a1& の圧縮にてエラーが発生しました.
+00051MBB0051E 001 ファイル（ &a1& ）が存在しません.
+00052MBB0052W 001 ファイル（ &a1& ）は既に存在します.
+00053MBB0053E 001 引数の数が正しくありません.
+00054MBB0054E 001 引数の内容が正しくありません.
+00055MBB0055E 001 エラー : &a1&
+00056MBB0056W 001 Warning process: &a1& が警告終了しました.
+00057MBB0057E 001 未送信のファイル（ &a1& ）が存在します
+
+01000MBB1000W 001 （顧客属性データ）営業店マスタに登録されていない店番が &a1& 件存在します.ログを参照してください.
+01001MBB1001W 001 &a1& に該当データが見つかりませんでした.
+01002MBB1002I 001 契約者（ &a1& ）をTFB_テレバン契約属性から削除しました.
+01004MBB1004W 001 契約者（ &a1& ）は既にTFB_テレバン契約属性に存在します.
+01006MBB1006W 001 契約者（ &a1& ）はTFB_テレバン契約属性に存在しません.
+01007MBB1007W 001 非キャンペーン用対象ファイル削除処理エラー.
+01010MBB1010E 001 契約者（ &a1& ）の移行処理でエラーが発生しました.
+01012MBB1012W 001 キャンペーン用対象ファイル削除処理エラー.
+01013MBB1013W 001 キャンペーン定義情報削除エラー.
+01014MBB1014W 001 キャンペーン終了情報の設定処理エラー.
+01025MBB1025W 001 （顧客属性データ）住所データに存在しない住所コードが &a1& 件存在します.ログを参照してください.
+01026MBB1026W 001 （個別明細固定性預金データ）商品マスタに存在しない商品コードが &a1& 件存在します.ログを参照してください.
+01027MBB1027W 001 （個別明細流動性預金データ）商品マスタに存在しない商品コードが &a1& 件存在します.ログを参照してください.
+01028MBB1028W 001 （個別明細ローンデータ）商品マスタに存在しない商品コードが &a1& 件存在します.ログを参照してください.
+01029MBB1029I 001 &a1&処理日ではありません.
+01030MBB1030I 001 &a1&処理を実行します.
+
+01100MBB1100E 001 テーブル（ &a1& ）にデータが存在しません.
+01101MBB1101I 001 &a1& 件のデ－タをテーブル（ &a2& ）から削除しました.
+01102MBB1102I 001 &a1& 個のテーブルについて不要データを削除しました.
+01103MBB1103I 001 テーブル（ &a1& ）を最適化しました.
+01104MBB1104I 001 &a1& 個目のテーブルを最適化しました.
+01105MBB1105I 001 &a1& 個のテーブルの最適化が終了しました.
+01108MBB1108E 001 指定時間までにログアーカイブが完了しませんでした.
+01109MBB1109W 001 テーブルスペース（ &a1& ）の使用率が &a2& を超えています.
+01110MBB1110W 001 コンタクトID（ &a1& ）のコンタクト属性更新件数とサービスログ更新件数が不一致です.
+01112MBB1112I 001 &a1& 件のコンタクト履歴を更新しました.
+01113MBB1113I 001 テーブル（ &a1& ）を削除しました.
+01115MBB1115I 001 センタID（ &a1& ）/ キャンペーンID（ &a2& ）のデータを削除しました.
+01119MBB1119E 001 該当するビュー（ &a1& ）が見つかりません.
+01120MBB1120E 001 テーブル（ &a1& ）はビュー切替の対象外です.
+01121MBB1121I 001 スキーマ（ &a1& ）の全テーブルを最適化しました.
+01122MBB1122E 001 テーブル名（ &a1& ）が不正です.
+
+05000MBB5000E 001 &a1& が定義ファイル（ &a2& ）に定義されていません.
+05001MBB5001I 001 ### &a1& が正常終了しました.
+05002MBB5002E 001 ### &a1& が異常終了しました.
+05000MBB5003I 001 ### &a1& を開始します.
+05005MBB5005E 001 &a1& のデータロード処理にてエラーが発生しました.
+05053MBB5053W 001 外部データロードで最大エラー件数を越えました.
+05054MBB5054W 001 外部データロードで拒否されたレコードがあります. &a1& .件.
+05059MBB5059W 001 ロードが失敗しました.
+05097MBB5097W 001 &a1& ファイルの退避に失敗しました.
+05104MBB5104W 001 重複データがあります.
+05105MBB5105W 001 ビュー切替が失敗しました.
+05106MBB5106W 001 インデックス削除が失敗しました.
+05107MBB5107W 001 インデックス作成が失敗しました.
+05108MBB5108I 001 対象ファイル情報（&a1&） のレコード数は &a2&件です.
+05109MBB5109E 001 SQL*Loader-2026が発生したため、ロードは異常終了しました.
+
+06005MBB6005E 001 ログ（ &a1& ）取得にてエラーが発生しました.
+06013MBB6013W 001 &a1& に接続できません.
+06014MBB6014W 001 統計情報サーバのバックアップデータが時間内に確認できませんでした.
+06015MBB6015W 001 &a1& のログファイル収集でエラーが発生しました.
+06016MBB6016E 001 統計情報サーバのバックアップ完了を確認できませんでした.
+06017MBB6017I 001 イベントログ収集リトライ実施.
+06050MBB6050E 001 &a1&の稼動監視結果に障害情報があります．
+06051MBB6051E 001 &a1&の稼動監視結果が取得できませんでした．
+
+06100MBB6100E 001 BackupExecジョブ（ &a1& ）にてエラーが発生しました.
+
+06300MBB6300E 001 DBサーバ &a1& は起動していません.
+06301MBB6301E 001 クラスタノード &a1& は稼動していません.
+06302MBB6302E 001 クラスタリソースの切り替えでエラーが発生しました.
+
+07000MBB7000W 001 店番: &a1& ,CIFNO: &a2& の顧客情報が存在しません.
