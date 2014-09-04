@@ -1,0 +1,1471 @@
+/*==========================================================================*/
+/* Copyright　Information Services International-Dentsu, Ltd.   　          */
+/*==========================================================================*/
+/*                                                                          */
+/* SYSTEM           : BANK・R－CC                                           */
+/*                                                                          */
+/* PROGRAM NAME     : 古いキャンペーンデータ削除処理                        */
+/*                                                                          */
+/* MODULE NAME      : RemoveOldCampaign                                     */
+/*                                                                          */
+/* FUNCTION         : 古いキャンペーンデータの削除を行う                    */
+/*                                                                          */
+/*                                                                          */
+/* CALLING MODULE   : Main Module.                                          */
+/*                                                                          */
+/* CALLED MODULE    : send_err, errhandler, db_connect                      */
+/*                                                                          */
+/* ENTRY POint      : Main Module.                                          */
+/*                                                                          */
+/* INPUT            : NONE                                                  */
+/*                                                                          */
+/* EXIT             : 正常終了       ・・・NORMAL(0)                        */
+/*                    異常終了       ・・・ERROR (9)                        */
+/*                                                                          */
+/* Mod   yy/mm/dd   Coder           Comment                                 */
+/*-----+----------+-------------+-------------------------------------------*/
+/* %00 | 09/05/21 | K.Miyahara  | First Edition.                            */
+/* %01 | 10/04/05 | K.Miyahara  | TS_外部ファイル情報の更新処理追加			*/
+/*==========================================================================*/
+
+/*--------------------------------------------------------------------------*/
+/* Standard include specification                                           */
+/*--------------------------------------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <stdarg.h>
+
+/*--------------------------------------------------------------------------*/
+/* User defined include specification                                       */
+/*--------------------------------------------------------------------------*/
+#include "msg.h"
+#include "batchcommon.h"
+#include "common.h"
+
+ EXEC SQL INCLUDE mbproc.h;
+ EXEC SQL INCLUDE TC_CampaignAttribute.h;
+ EXEC SQL INCLUDE TC_CampaignTSR.h;
+ EXEC SQL INCLUDE TS_TargetFileInfo.h;
+
+/*--------------------------------------------------------------------------*/
+/*                           DEFINE STATEMENTS                              */
+/*--------------------------------------------------------------------------*/
+
+
+/*--------------------------------------------------------------------------*/
+/*                           EXTERNAL DECLARES                              */
+/*--------------------------------------------------------------------------*/
+char    process_name[43];
+char    g_szDtlMsg[256];                            /* 事象詳細文字列       */
+
+EXEC SQL BEGIN DECLARE SECTION;
+    char	sqlcmd[2048];           /* SQL文  */
+    char	sqlcmd1[2048];          /* SQL文1 */
+    char	sqlcmd2[2048];          /* SQL文2 */
+    short	tb_cnt ;                /* レコードカウンター */
+EXEC SQL END DECLARE SECTION;
+
+/*--------------------------------------------------------------------------*/
+/*                          STRUCT DECLARATIONS                             */
+/*--------------------------------------------------------------------------*/
+
+/*--------------------------------------------------------------------------*/
+/*                           SUBROUTNE DEFINITION                           */
+/*--------------------------------------------------------------------------*/
+extern int send_err();
+extern int db_connect();
+extern void errhandler();
+int set_camp_ending( void );
+int drop_kyn( void );
+int drop_free( void );
+int kyn_delete( void );
+
+
+/****************************************************************************/
+/*                                                                          */
+/*                            PROCEDURE DIVISION                            */
+/*                                                                          */
+/****************************************************************************/
+
+/*--------------------------------------------------------------------------*/
+/*                              MAIN ROUTINE                                */
+/*--------------------------------------------------------------------------*/
+void main( argc, argv )
+int argc;
+char *argv[];
+{
+
+/*--------------------------------------------------------------------------*/
+/*                      LOCAL VARIABLE DECLARATIONS                         */
+/*--------------------------------------------------------------------------*/
+    int     rc;                             /* リターンコード               */
+    int     rc1;                            /*                              */
+    int     rc2;                            /*                              */
+    int     rc3;                            /*                              */
+	int     exit_code;                       /* 終了コード                  */
+
+/*==========================================================================*/
+/*      INITIALIZATION                                                      */
+/*==========================================================================*/
+
+	/*-----------------------------*/
+	/* Print process start message */
+	/*-----------------------------*/
+	strcpy( G_STATION, "RemoveOldCampaign" );
+
+	memset(process_name,0x00,sizeof(process_name));
+	strcpy(process_name,"古いキャンペーンデータ削除処理");
+
+	send_err( m$start_process, NORMAL, process_name, "", "", G_STATION );
+
+
+    /*-----------------------------*/
+    /* Setup error handler routine */
+    /*-----------------------------*/
+    EXEC SQL WHENEVER SQLERROR DO errhandler();
+
+	/*-----------------------------*/
+	/* Connect to database         */
+	/*-----------------------------*/
+    G_POSITION = __LINE__;
+    rc = db_connect();
+    if( rc != 0 ) {
+        send_err( m$db_connect, -1, NULL, NULL, NULL, G_STATION );
+		exit_code = ERROR ;
+        goto ENDPROC;
+    }
+
+    /*
+    **  変数の初期化
+    */
+    exit_code = NORMAL ;
+
+    /*======================================================================**
+    **              メイン処理
+    **======================================================================*/
+
+    /*
+    ** 履歴データ削除処理
+    */
+    /*
+    ** キャンペーン終了情報の設定処理
+    */
+    rc = set_camp_ending();
+    if( rc != NORMAL ) {
+        send_err( m$MBB1014W, 0, NULL, NULL, NULL, G_STATION );
+		exit_code = ERROR ;
+        goto ENDPROC_NG;
+    }
+
+    /*
+    ** キャンペーン用対象ファイル削除処理
+    */
+    rc1 = drop_kyn();
+    if( rc1 != NORMAL ) {
+        send_err( m$MBB1012W, 0, NULL, NULL, NULL, G_STATION );
+		exit_code = ERROR ;
+        goto ENDPROC_NG;
+    }
+
+    /*
+    ** 非キャンペーン用対象ファイル削除処理
+    */
+    rc2 = drop_free();
+    if( rc2 != NORMAL ) {
+        send_err( m$MBB1007W, 0, NULL, NULL, NULL, G_STATION );
+		exit_code = ERROR ;
+        goto ENDPROC_NG;
+    }
+
+    /*
+    ** キャンペーン定義情報削除
+    */
+    rc3 = kyn_delete();
+    if( rc3 != 0 ) {
+        send_err( m$MBB1013W, 0, NULL, NULL, NULL, G_STATION );
+		exit_code = ERROR ;
+        goto ENDPROC_NG;
+    }
+
+	/*======================================================================**
+    **      終  了  処  理
+    **======================================================================*/
+    /*
+    **  正常終了
+    */
+    /* コネクト開放処理 */
+    EXEC SQL COMMIT;
+
+    goto ENDPROC ;
+
+    /*
+    **  異常終了
+    */
+ENDPROC_NG:
+    /* コネクト開放処理 */
+    EXEC SQL ROLLBACK WORK;
+
+	goto ENDPROC ;
+
+ENDPROC:
+    if ( exit_code == NORMAL ) {
+        send_err( m$stop_process, NORMAL, process_name, "", "", G_STATION );
+    } 
+	else {
+        send_err( m$abend_process, ERROR, process_name, "", "", G_STATION );
+        exit_code = ERROR;
+    }
+    exit( exit_code );
+}
+
+
+
+/*==========================================================================*/
+/*                                                                          */
+/* MODULE NAME      : set_camp_ending                                       */
+/*                                                                          */
+/* FUNCTION         : キャンペーン終了情報の設定処理                        */
+/*                                                                          */
+/* CALLING MODULE   : Main                                                  */
+/*                                                                          */
+/* CALLED MODULE    : send_err                                              */
+/*                                                                          */
+/* ENTRY POINT      :                                                       */
+/*                                                                          */
+/* INPUT            : なし                                                  */
+/*                  :                                                       */
+/*                                                                          */
+/*==========================================================================*/
+int set_camp_ending( void )
+{
+/*--------------------------------------------------------------------------*/
+/*                      HOST VARIABLE DECLARATIONS (DB2)                    */
+/*--------------------------------------------------------------------------*/
+
+/*--------------------------------------------------------------------------*/
+/*                      LOCAL VARIABLE DECLARATIONS                         */
+/*--------------------------------------------------------------------------*/
+    char    work[256];      /* 文字列ワーク領域 */
+
+
+    /*----------------------------------------------------------------------**
+    **  変数初期化
+    **----------------------------------------------------------------------*/
+    
+    
+    /*----------------------------------------------------------------------**
+    **  キャンペーンの終了情報の設定処理 (キャンペーン締め処理)
+    **----------------------------------------------------------------------*/
+    
+    /*
+    **  終了対象となる、キャンペーン情報の取得
+    */
+    /* キャンペーン終了日から7日以上経過したキャンペーンはステータスを終了  */
+    /*   に更新する、締め処理を行う。                                       */
+    
+    strcpy( G_SQL, "DECLARE cur_cmp" );
+    
+    G_POSITION = __LINE__;
+    EXEC SQL DECLARE cur_cmp CURSOR FOR 
+            SELECT  
+                cmp.センタID, 
+                cmp.キャンペーンID, 
+                tai.対象ファイル名 
+            FROM    
+                TC_キャンペーン属性 cmp,
+                TS_対象ファイル情報 tai
+            WHERE   
+                    cmp.キャンペーン終了日 is not null 
+                AND cmp.キャンペーン終了日 < ( SYSDATE - 7)
+                AND cmp.キャンペーンステータス = '2' 
+                AND tai.削除フラグ = '0' 
+                AND cmp.対象ファイル名 = tai.対象ファイル名
+            ;
+    if( sqlca.sqlcode < 0 ) {
+        send_err( m$sql_statment, 0, "TC_キャンペーン属性の取得失敗/DECLARE cur_cmp",
+                    NULL, NULL, G_STATION );
+        return( ERROR );
+    }
+
+    strcpy( G_SQL, "OPEN cur_cmp" );
+    G_POSITION = __LINE__;
+    EXEC SQL OPEN cur_cmp;
+    if( sqlca.sqlcode < 0 ) {
+        send_err( m$sql_statment, 0, "TC_キャンペーン属性の取得失敗/OPEN cur_cmp",
+                    NULL, NULL, G_STATION );
+        return( ERROR );
+    }
+
+    while( 1 ) {
+        memset( TCCA_center_id,             0x00, sizeof(TCCA_center_id) );
+        memset( TCCA_campaign_id,           0x00, sizeof(TCCA_campaign_id) );
+        memset( TSTF_target_file_name.arr,  0x00, sizeof(TSTF_target_file_name.arr) );
+
+        strcpy( G_SQL, "FETCH cur_cmp" );
+        G_POSITION = __LINE__;
+
+        EXEC SQL FETCH cur_cmp
+                INTO    :TCCA_center_id         :TCCAi_center_id,       /* センタID */
+                        :TCCA_campaign_id       :TCCAi_campaign_id,     /* キャンペーンID */
+						:TSTF_target_file_name  :TSTFi_target_file_name /* 対象ファイル名 */
+                ;
+        
+        if( sqlca.sqlcode == ORA_NOF ) {
+            break;
+        }
+        if( sqlca.sqlcode < 0 ) {
+            EXEC SQL CLOSE cur_cmp; 
+            send_err( m$sql_statment, 0, "TC_キャンペーン属性の取得失敗/FETCH cur_cmp",
+                        NULL, NULL, G_STATION );
+            return( ERROR );
+        }
+
+        /*
+        ** キャンペーンステータスの更新処理 (締め処理)
+        */
+        strcpy( G_SQL, "UPDATE TC_キャンペーン属性" );
+        G_POSITION = __LINE__;
+
+        EXEC SQL UPDATE 
+                    TC_キャンペーン属性
+                 SET    
+                    キャンペーンステータス = '3'
+                 WHERE  センタID       = :TCCA_center_id 
+                    AND キャンペーンID = :TCCA_campaign_id 
+                ;
+        
+        if( sqlca.sqlcode < 0 ) {
+            EXEC SQL CLOSE cur_cmp;
+            memset(work, 0x00, sizeof(work));
+            sprintf(work,"UPDATE TC_キャンペーン属性 SET キャンペーンステータス = '3' ");
+            strcat(work, "WHERE センタID = ");
+            strcat(work, TCCA_center_id);
+            strcat(work, " AND キャンペーンID = ");
+            strcat(work, TCCA_campaign_id);
+            send_err( m$sql_statment, 0, work, NULL, NULL, G_STATION );
+            return( ERROR );
+        }
+        
+        /*
+        ** 対象ファイルの圧縮処理
+        */
+        strcpy( G_SQL, "DELETE FROM (対象ファイル) WHERE 配分フラグ = '0' " );
+
+        memset( sqlcmd, 0x00, sizeof(sqlcmd) );
+
+        strcpy( sqlcmd, "DELETE FROM " );
+        strcat( sqlcmd,     TSTF_target_file_name.arr );
+        strcat( sqlcmd,     " " );
+        strcat( sqlcmd, "WHERE ");
+        strcat( sqlcmd,     "配分フラグ = '0' " );
+
+        strcpy( G_SQL, sqlcmd );
+        
+        G_POSITION = __LINE__;
+        
+        /* 動的SQL実行 */
+        EXEC SQL EXECUTE IMMEDIATE :sqlcmd ;
+        
+        if( sqlca.sqlcode < 0 ) {
+            EXEC SQL CLOSE cur_cmp; 
+            send_err( m$sql_statment, 0, sqlcmd, NULL, NULL, G_STATION );
+            return( ERROR );
+        }
+        
+        /*
+        ** TD_リコール情報の削除処理
+        */
+        strcpy( G_SQL, "DELETE FROM TD_リコール情報" );
+        G_POSITION = __LINE__;
+
+        EXEC SQL 
+            DELETE FROM 
+                TD_リコール情報 
+            WHERE   キャンペーンセンタID = :TCCA_center_id
+                AND キャンペーンID       = :TCCA_campaign_id
+            ;
+
+        if( sqlca.sqlcode < 0 ) {
+            EXEC SQL CLOSE cur_cmp; 
+            memset(work, 0x00, sizeof(work));
+            sprintf(work,"DELETE FROM TD_リコール情報 WHERE キャンペーンセンタID = %s AND キャンペーンID = %s;",
+                TCCA_center_id,TCCA_campaign_id);
+            send_err( m$sql_statment, 0, work, NULL, NULL, G_STATION );
+            return( ERROR );
+        }
+        
+        /*
+        ** TC_キャンペーン顧客の削除処理
+        */
+        strcpy( G_SQL, "DELETE FROM TC_キャンペーン顧客" );
+        G_POSITION = __LINE__;
+
+        EXEC SQL 
+            DELETE FROM 
+                TC_キャンペーン顧客 
+            WHERE   センタID       = :TCCA_center_id
+                AND キャンペーンID = :TCCA_campaign_id
+            ;
+
+        if( sqlca.sqlcode < 0 ) {
+            EXEC SQL CLOSE cur_cmp;
+            memset(work, 0x00, sizeof(work));
+            sprintf(work,"DELETE FROM TC_キャンペーン顧客 WHERE センタID = %s AND キャンペーンID = %s;",
+                TCCA_center_id,TCCA_campaign_id);
+            send_err( m$sql_statment, 0, work, NULL, NULL, G_STATION );
+            return( ERROR );
+        }
+
+    }
+    
+    /*
+    **  オープン中のＳＱＬカーソルのクローズ
+    */
+    G_POSITION = __LINE__;
+    EXEC SQL CLOSE cur_cmp; 
+    if( sqlca.sqlcode < 0 ) {
+        send_err( m$sql_statment, 0, "TC_キャンペーン属性の取得失敗/CLOSE cur_cmp",
+                    NULL, NULL, G_STATION );
+        return( ERROR );
+    }
+
+    /*----------------------------------------------------------------------**
+    **  正常処理の場合はコミットの発行
+    **----------------------------------------------------------------------*/
+	EXEC SQL COMMIT ;
+
+    return( NORMAL );
+}
+
+
+/*==========================================================================*/
+/*                                                                          */
+/* MODULE NAME      : drop_kyn                                              */
+/*                                                                          */
+/* FUNCTION         : キャンペーン属性の対象テーブルの削除                  */
+/*                                                                          */
+/* CALLING MODULE   : Main                                                  */
+/*                                                                          */
+/* CALLED MODULE    : send_err                                              */
+/*                                                                          */
+/* ENTRY POINT      :                                                       */
+/*                                                                          */
+/* INPUT            : なし                                                  */
+/*                  :                                                       */
+/*                                                                          */
+/*==========================================================================*/
+int drop_kyn( void )
+{
+/*--------------------------------------------------------------------------*/
+/*                      HOST VARIABLE DECLARATIONS (DB2)                    */
+/*--------------------------------------------------------------------------*/
+
+/*--------------------------------------------------------------------------*/
+/*                      LOCAL VARIABLE DECLARATIONS                         */
+/*--------------------------------------------------------------------------*/
+    char    work[256];      /* 文字列ワーク領域 */
+
+    /*----------------------------------------------------------------------**
+    **  変数初期化
+    **----------------------------------------------------------------------*/
+    
+    
+    /*======================================================================**
+    **  キャンペーン対象テーブル削除
+    **======================================================================*/
+    
+    strcpy( G_SQL, "キャンペーン対象テーブル名取得" );
+    
+    
+    G_POSITION = __LINE__;
+    EXEC SQL DECLARE cur5 CURSOR FOR 
+    
+    /*
+    **  終了日より2ヶ月経過したキャンペーンを取得．
+    */
+    SELECT
+        kn.対象ファイル名,
+        kn.センタID,
+        kn.キャンペーンID,
+		tai.条件名
+    FROM
+        TC_キャンペーン属性 kn,
+        TS_対象ファイル情報 tai
+    WHERE
+            kn.対象ファイル名 = tai.対象ファイル名 AND
+			kn.キャンペーン終了日 is not null AND
+            kn.キャンペーンステータス = '3' 
+        AND tai.削除フラグ = '0' 
+        AND tai.データ区分 in ( '1', '9' ) 
+        AND months_between( sysdate , kn.キャンペーン終了日 ) > 2
+    ;
+    if( sqlca.sqlcode < 0 ) {
+        send_err( m$sql_statment, 0, "キャンペーン対象テーブル名取得失敗/DECLARE cur5",
+                    NULL, NULL, G_STATION );
+        return( ERROR );
+    }
+
+    /* カーソルオープン */
+    G_POSITION = __LINE__;
+    EXEC SQL OPEN cur5;
+    if( sqlca.sqlcode < 0 ) {
+        send_err( m$sql_statment, 0, "キャンペーン対象テーブル名取得失敗/OPEN cur5",
+                    NULL, NULL, G_STATION );
+        return( ERROR );
+    }
+    
+    /*-------------------------------------------*
+    **  データが無くなるまでループ
+    **-------------------------------------------*/
+    for(;;)
+    {
+        /* ホスト変数初期化 */
+        memset( TCCA_target_file_name.arr,  0x00, sizeof(TCCA_target_file_name.arr) );
+        memset( TCCA_center_id,             0x00, sizeof(TCCA_center_id) );
+        memset( TCCA_campaign_id,           0x00, sizeof(TCCA_campaign_id) );
+		memset( TSTF_proviso_name.arr,		0x00, sizeof(TSTF_proviso_name.arr) );
+
+        /*-------------------------------------------*
+        **  フェッチ処理
+        **-------------------------------------------*/
+        strcpy( G_SQL, "DROP対象ファイル名の取得" );
+        G_POSITION = __LINE__;
+        EXEC SQL FETCH cur5 INTO 
+                :TCCA_target_file_name  :TCCAi_target_file_name,
+                :TCCA_center_id         :TCCAi_center_id,
+                :TCCA_campaign_id       :TCCAi_campaign_id,
+				:TSTF_proviso_name		:TSTFi_proviso_name
+            ;
+        
+        if( sqlca.sqlcode < 0 ) {
+            EXEC SQL CLOSE cur5;
+            send_err( m$sql_statment, 0, "キャンペーン対象テーブル名取得失敗/FETCH cur5",
+                        NULL, NULL, G_STATION );
+            return( ERROR );
+        }
+
+        if( sqlca.sqlcode == ORA_NOF ) {
+            break;
+        }
+        
+        
+        /*-------------------------------------------*
+        **  対象テーブルDROP
+        **-------------------------------------------*/
+        /* 対象テーブルカウント数初期化 */
+        tb_cnt = 0;
+
+
+        if( TCCAi_target_file_name != ORA_NULL ) {
+            /*-------------------------------------------*
+            **  対象テーブル存在チェック
+            **-------------------------------------------*/
+            strcpy( G_SQL, "対象ファイル情報カウント" );
+            G_POSITION = __LINE__;
+            
+            EXEC SQL
+                SELECT 
+                    COUNT(*) 
+                INTO
+                    :tb_cnt
+                FROM 
+                    USER_TABLES
+                WHERE 
+                    TABLE_NAME = :TCCA_target_file_name 
+                ;
+            
+            if( sqlca.sqlcode < 0 ) {
+                EXEC SQL CLOSE cur5;
+                send_err( m$sql_statment, 0, "対象ファイル情報カウント失敗/SELECT COUNT(*) FROM USER_TABLES",
+                            NULL, NULL, G_STATION );
+                return( ERROR );
+            }
+            
+            
+            /*-------------------------------------------*
+            **  対象ファイル名を取得したらDROP処理
+            **-------------------------------------------*/
+            if( tb_cnt != 0 ) {
+                memset( sqlcmd1, 0x00, sizeof(sqlcmd1) );
+                strcpy( sqlcmd1, "DROP TABLE " );
+                strcat( sqlcmd1, TCCA_target_file_name.arr );
+                
+                strcpy( G_SQL, sqlcmd1 );
+                
+                G_POSITION = __LINE__;
+                
+                /* 動的SQLの実行 */
+
+                EXEC SQL EXECUTE IMMEDIATE :sqlcmd1 ;
+
+                if( sqlca.sqlcode < 0 ) {
+                    EXEC SQL CLOSE cur5;
+                    send_err( m$sql_statment, 0, "対象ファイルDROP失敗/EXECUTE IMMEDIATE",
+                                NULL, NULL, G_STATION );
+                    return( ERROR );
+                }
+                
+
+				/* テーブルDROPメッセージ */
+                memset(work,        0x00,   sizeof(work));
+                sprintf(work, "テーブル「%s」を削除しました（キャンペーン対象ファイル）",
+                     TCCA_target_file_name.arr);
+                send_err( m$message1, 0, work, NULL, NULL, G_STATION );
+            }
+
+
+        	/* ------------------------------------------ */
+        	/* 外部データかをチェックしテーブル無しに変更 */
+        	/* ------------------------------------------ */
+	        tb_cnt=0;
+	        G_POSITION = __LINE__;
+	        EXEC SQL SELECT COUNT(*) INTO :tb_cnt
+	                   FROM TS_外部ファイル情報
+	                  WHERE ファイルID = :TSTF_proviso_name;
+	        if( sqlca.sqlcode < 0 ) {
+	            send_err( m$sql_statment, sqlca.sqlcode, "SELECT COUNT(*) FROM TS_外部ファイル情報", NULL, NULL, G_STATION );
+	            return( ERROR );
+	        }
+
+
+	        if( tb_cnt != 0 ) {
+	            G_POSITION = __LINE__;
+	            EXEC SQL UPDATE TS_外部ファイル情報
+	                        SET テーブル有無 = '0'
+	                      WHERE ファイルID = :TSTF_proviso_name;
+	            if( sqlca.sqlcode < 0 ) {
+	                send_err( m$sql_statment, sqlca.sqlcode, "UPDATE TS_外部ファイル情報 SET テーブル有無 = '0'", NULL, NULL, G_STATION );
+	                return( ERROR );
+	            }
+	            memset( work, 0x00, sizeof( work ) );
+	            strcpy( work, TSTF_proviso_name.arr );
+	            strcat( work, " 外部ファイルをテーブル無に変更しました." );
+	            send_err( m$message1, 0, work, NULL, NULL, G_STATION );
+	        }
+
+            /*==============================================================**
+            **  コールデータの削除処理
+            **==============================================================*/
+            strcpy( G_SQL, "コールデータの削除処理" );
+
+            G_POSITION = __LINE__;
+            
+            EXEC SQL DECLARE cur7 CURSOR FOR 
+                SELECT
+                    distinct コールデータ名 
+                FROM
+                    TC_キャンペーンTSR
+                WHERE
+                        センタID       = :TCCA_center_id
+                    AND キャンペーンID = :TCCA_campaign_id 
+                ;
+
+            if( sqlca.sqlcode < 0 ) {
+                EXEC SQL CLOSE cur5;
+                send_err( m$sql_statment, 0, "コールデータ対象テーブル名取得失敗/DECLARE cur7",
+                            NULL, NULL, G_STATION );
+                return( ERROR );
+            }
+
+            /* カーソルオープン */
+            G_POSITION = __LINE__;
+            EXEC SQL OPEN cur7;
+            if( sqlca.sqlcode < 0 ) {
+                EXEC SQL CLOSE cur5;
+                send_err( m$sql_statment, 0, "コールデータ対象テーブル名取得失敗/OPEN cur7",
+                            NULL, NULL, G_STATION );
+                return( ERROR );
+            }
+
+
+            /*-------------------------------------------*
+            **  コールデータが無くなるまでループ
+            **-------------------------------------------*/
+            for(;;)
+            {
+                /* ホスト変数初期化 */
+                memset(TCCT_call_data_name.arr, 0x00, sizeof(TCCT_call_data_name.arr));
+                
+                /*-------------------------------------------*
+                **  フェッチ処理
+                **-------------------------------------------*/
+                strcpy( G_SQL, "        DROP対象ファイル名の取得(コールデータ)" );
+                G_POSITION = __LINE__;
+                    EXEC SQL FETCH cur7 INTO 
+                            :TCCT_call_data_name        :TCCTi_call_data_name
+                        ;
+                
+                if( sqlca.sqlcode < 0 ) {
+                    EXEC SQL CLOSE cur5;
+                    EXEC SQL CLOSE cur7;
+                    send_err( m$sql_statment, 0, "コールデータ対象テーブル名取得失敗/FETCH cur7",
+                                NULL, NULL, G_STATION );
+                    return( ERROR );
+                }
+
+                if( sqlca.sqlcode == ORA_NOF ) {
+
+                    break ;
+                }
+
+                /* 対象テーブルカウント数初期化 */
+                tb_cnt = 0 ;
+                
+                if( TCCTi_call_data_name != ORA_NULL ) {
+                    /*-------------------------------------------*
+                    **  コールデータの存在チェック
+                    **-------------------------------------------*/
+                    strcpy( G_SQL, "        対象ファイル情報カウント(コールデータ)" ) ;
+                    G_POSITION = __LINE__;
+
+                    EXEC SQL
+                        SELECT 
+                            COUNT(*) 
+                        INTO
+                            :tb_cnt
+                        FROM 
+                            USER_TABLES
+                        WHERE 
+                            TABLE_NAME = :TCCT_call_data_name
+                        ;
+                    
+                    if( sqlca.sqlcode < 0 ) {
+                        EXEC SQL CLOSE cur5;
+                        EXEC SQL CLOSE cur7;
+                        send_err( m$sql_statment, 0, "対象ファイル情報カウント失敗/SELECT COUNT(*) ",
+                                    NULL, NULL, G_STATION );
+                        return( ERROR );
+                    }
+                }
+ 
+                /*-------------------------------------------*
+                **  対象ファイル名を取得したらDROP処理
+                **-------------------------------------------*/
+                if( tb_cnt != 0 ) {
+                    memset( sqlcmd1, 0x00, sizeof(sqlcmd1) );
+                    strcpy( sqlcmd1, "DROP TABLE ");
+                    strcat( sqlcmd1, TCCT_call_data_name.arr );
+                    
+
+                    strcpy( G_SQL, sqlcmd1 );
+                    G_POSITION = __LINE__;
+
+                    /* 動的SQLの実行 */
+                    EXEC SQL EXECUTE IMMEDIATE :sqlcmd1;
+                    
+                    if( sqlca.sqlcode < 0 ) {
+                        EXEC SQL CLOSE cur5;
+                        EXEC SQL CLOSE cur7;
+                        send_err( m$sql_statment, 0, sqlcmd1, NULL, NULL, G_STATION );
+                        return( ERROR );
+                    }
+
+                    /* テーブルDROPメッセージ */
+                    memset(work,        0x00,   sizeof(work));
+                    sprintf(work, "テーブル「%s」を削除しました（コールデータ）",
+                         TCCT_call_data_name.arr);
+                    send_err( m$message1, 0, work, NULL, NULL, G_STATION );
+                }
+            }
+            /*
+            **  カーソルクローズ
+            */
+            EXEC SQL CLOSE cur7 ;
+            if( sqlca.sqlcode < 0 ) {
+                return( ERROR );
+            }
+            
+            
+            /*-------------------------------------------*
+            **  対象ファイル情報、削除フラグ='1'に更新
+            **-------------------------------------------*/
+            /* 対象ファイル名をセット */
+
+            strcpy( G_SQL, "対象ファイル情報、削除フラグ='1'に更新" );
+            G_POSITION = __LINE__;
+            
+            /* TS_対象ファイル情報の更新 */
+            EXEC SQL 
+                UPDATE 
+                    TS_対象ファイル情報
+                SET 
+                    削除フラグ = '1'
+                WHERE 
+                    対象ファイル名 = :TCCA_target_file_name 
+                ;
+            
+            if( sqlca.sqlcode < 0 ) {
+                EXEC SQL CLOSE cur5;
+                send_err( m$sql_statment, 0, "対象ファイル情報更新失敗/UPDATE 対象ファイル情報 ",
+                                NULL, NULL, G_STATION );
+                return( ERROR ) ;   
+            }
+        }
+    }
+
+    /*-------------------------------------------**
+    **  カーソルクローズ
+    **-------------------------------------------*/
+    EXEC SQL CLOSE cur5;
+    if( sqlca.sqlcode < 0 ) {
+        send_err( m$sql_statment, 0, "キャンペーン対象テーブル名取得失敗/CLOSE cur5",
+                    NULL, NULL, G_STATION );
+        return( ERROR );
+    }
+
+    /*
+    **  コミットの発行
+    */
+    EXEC SQL COMMIT ;
+    
+    
+    return( NORMAL );
+
+}
+
+
+/*==========================================================================*/
+/*                                                                          */
+/* MODULE NAME      : drop_free                                             */
+/*                                                                          */
+/* FUNCTION         : 対象ファイル情報の対象テーブルのDROP                  */
+/*                                                                          */
+/* CALLING MODULE   : Main                                                  */
+/*                                                                          */
+/* CALLED MODULE    : send_err                                              */
+/*                                                                          */
+/* ENTRY POINT      :                                                       */
+/*                                                                          */
+/* INPUT            : なし                                                  */
+/*                  :                                                       */
+/*                                                                          */
+/*==========================================================================*/
+int drop_free( void )
+{
+/*--------------------------------------------------------------------------*/
+/*                      HOST VARIABLE DECLARATIONS (DB2)                    */
+/*--------------------------------------------------------------------------*/
+
+/*--------------------------------------------------------------------------*/
+/*                      LOCAL VARIABLE DECLARATIONS                         */
+/*--------------------------------------------------------------------------*/
+    char    work[256];      /* 文字列ワーク領域 */
+
+    /*----------------------------------------------------------------------**
+    **  変数初期化
+    **----------------------------------------------------------------------*/
+
+	/*======================================================================**
+	** キャンペーン未使用のSEGスケジュール作成されたテーブルDROP
+	** 対象：保有期間10日データ(TS_タスク管理.保有期間='1')
+	**======================================================================*/
+
+	/* カーソル宣言 */
+	G_POSITION = __LINE__;
+	EXEC SQL DECLARE cur8 CURSOR FOR 
+		SELECT
+			tai.対象ファイル名
+		FROM
+			TS_対象ファイル情報 tai,
+			TS_タスク管理 tsk
+		WHERE
+			tai.表示用ファイル名 = tsk.対象ファイル名 AND
+			tai.キャンペーンフラグ = '0' AND 
+			tai.削除フラグ = '0' AND 
+			tai.登録日 + 10 <= SYSDATE AND 
+			tai.データ区分 not in ( '0' , '4' ) AND 
+			tai.対象ファイル名 is not null AND
+			tsk.保有期間 = '1'
+		;
+	if( sqlca.sqlcode < 0 ) {
+		memset( work, 0x00, sizeof(work) );
+		strcpy( work, "キャンペーン未使用SEGスケジュールテーブル取得失敗/DECLARE");
+		send_err( m$sql_statment, 0, work, NULL, NULL, G_STATION );
+		return( ERROR );
+	}
+
+    /* オープンカーソル */
+    G_POSITION = __LINE__;
+	EXEC SQL OPEN cur8;
+	if( sqlca.sqlcode < 0 ) {
+		memset( work, 0x00, sizeof(work) );
+		strcpy( work, "キャンペーン未使用SEGスケジュールテーブル取得失敗/OPEN");
+		send_err( m$sql_statment, 0, work, NULL, NULL, G_STATION );
+		return( ERROR );
+	}
+
+    /*-------------------------------------------**
+    **  取得データが無くなるまでループ
+    **-------------------------------------------*/
+	for(;;) {
+
+		/* 変数初期化 */
+		memset(TSTF_target_file_name.arr, 0x00, sizeof(TSTF_target_file_name.arr));
+
+		/* カーソルフェッチ */
+		G_POSITION = __LINE__;
+		EXEC SQL FETCH cur8 
+			INTO 
+				:TSTF_target_file_name :TSTFi_target_file_name 
+			;
+		if( sqlca.sqlcode < 0 ) {
+			EXEC SQL CLOSE cur8;
+			memset( work, 0x00, sizeof(work) );
+			strcpy( work, "キャンペーン未使用SEGスケジュールテーブル取得失敗/FETCH");
+			send_err( m$sql_statment, 0, work, NULL, NULL, G_STATION );
+			return( ERROR );
+		}
+        if( sqlca.sqlcode == ORA_NOF ) {
+            break;
+        }
+        
+
+		/*-------------------------------------------**
+		**  対象ファイル名に該当するテーブルを削除
+		**-------------------------------------------*/
+		/* 対象テーブルカウント数初期化 */
+		tb_cnt = 0;
+
+		if( TSTFi_target_file_name != ORA_NULL ) {
+			/*-------------------------------------------**
+			**  対象ファイル存在チェック
+			**-------------------------------------------*/
+
+			G_POSITION = __LINE__;
+			EXEC SQL
+				SELECT 
+					COUNT(*) 
+				INTO
+					:tb_cnt
+				FROM 
+					USER_TABLES
+				WHERE 
+					TABLE_NAME = :TSTF_target_file_name
+				;
+			if( sqlca.sqlcode < 0 ) {
+                EXEC SQL CLOSE cur8 ;
+				memset( work, 0x00, sizeof(work) );
+				strcpy( work, "対象ファイル情報カウント失敗/SELECT COUNT(*)");
+				send_err( m$sql_statment, 0, work, NULL, NULL, G_STATION );
+                return( ERROR );
+			}
+
+			/*-------------------------------------------**
+			**  対象ファイル名を取得したらDROP処理
+			**-------------------------------------------*/
+			if( tb_cnt != 0 ) {
+				memset( sqlcmd1, 0x00, sizeof(sqlcmd1) );
+				strcpy( sqlcmd1, "DROP TABLE " );
+				strcat( sqlcmd1, TSTF_target_file_name.arr );
+                
+	                /* 動的SQL実行 */
+                G_POSITION = __LINE__;
+				EXEC SQL EXECUTE IMMEDIATE :sqlcmd1 ;
+                if( sqlca.sqlcode < 0 ) {
+                    EXEC SQL CLOSE cur8 ;
+					send_err( m$sql_statment, 0, sqlcmd1, NULL, NULL, G_STATION );
+					return( ERROR );
+				}
+                
+                /* 削除メッセージ */
+                memset( work, 0x00, sizeof(work) );
+                sprintf(work, "テーブル「%s」を削除しました（非キャンペーン対象ファイル）", TSTF_target_file_name.arr);
+                send_err( m$message1, 0, work, NULL, NULL, G_STATION );
+            }
+        }
+
+		/*-------------------------------------------**
+		**  対象ファイル情報該当レコード削除処理
+		**-------------------------------------------*/
+		memset( sqlcmd2, 0x00, sizeof(sqlcmd2) );
+
+		strcpy( sqlcmd2, "DELETE FROM TS_対象ファイル情報 " );
+		strcat( sqlcmd2, "WHERE 対象ファイル名 = '" );
+		strcat( sqlcmd2, TSTF_target_file_name.arr );
+		strcat( sqlcmd2, "' " );
+
+
+		/* 動的SQLの実行 */		
+		G_POSITION = __LINE__ ;
+		EXEC SQL EXECUTE IMMEDIATE :sqlcmd2 ;
+        if( sqlca.sqlcode < 0 ) {
+            EXEC SQL CLOSE cur8 ;
+            send_err( m$sql_statment, 0, sqlcmd2, NULL, NULL, G_STATION ) ;
+            return( ERROR ) ;
+        }
+    }   
+
+	/* カーソルクローズ */
+	EXEC SQL CLOSE cur8;
+
+    /*======================================================================**
+    ** キャンペーン未使用の対象テーブルDROP
+	** 対象：保有期間2ヶ月データ
+    **======================================================================*/
+
+	/* カーソル宣言 */
+	G_POSITION = __LINE__;
+	EXEC SQL DECLARE cur6 CURSOR FOR 
+		SELECT
+			対象ファイル名,
+			条件名
+		FROM
+			TS_対象ファイル情報
+		WHERE
+			キャンペーンフラグ = '0' AND 
+			削除フラグ = '0' AND 
+			months_between( sysdate , 登録日 ) > 2 AND 
+			データ区分 not in ( '0' , '4' ) AND 
+			対象ファイル名 is not null
+        ;
+    if( sqlca.sqlcode < 0 ) {
+		memset( work, 0x00, sizeof(work) );
+		strcpy( work, "非キャンペーンDROP対象テーブル取得失敗/DECLARE");
+		send_err( m$sql_statment, 0, work, NULL, NULL, G_STATION );
+        return( ERROR );
+    }
+    
+    /* オープンカーソル */
+    G_POSITION = __LINE__;
+    EXEC SQL OPEN cur6;
+    if( sqlca.sqlcode < 0 ) {
+		memset( work, 0x00, sizeof(work) );
+		strcpy( work, "非キャンペーンDROP対象テーブル取得失敗/OPEN");
+		send_err( m$sql_statment, 0, work, NULL, NULL, G_STATION );
+        return( ERROR );
+    }
+
+    /*-------------------------------------------**
+    **  データが無くなるまでループ
+    **-------------------------------------------*/
+    for(;;) {
+
+		/* 変数初期化 */
+        memset(TSTF_target_file_name.arr, 0x00, sizeof(TSTF_target_file_name.arr)); /*(%04)ADD*/
+		memset(TSTF_proviso_name.arr,	  0x00, sizeof(TSTF_proviso_name.arr) );
+
+		/* カーソルフェッチ */
+        G_POSITION = __LINE__;
+        EXEC SQL FETCH cur6 
+            INTO 
+                :TSTF_target_file_name :TSTFi_target_file_name,
+				:TSTF_proviso_name	   :TSTFi_proviso_name				
+            ;
+        if( sqlca.sqlcode < 0 ) {
+            EXEC SQL CLOSE cur6;
+			memset( work, 0x00, sizeof(work) );
+			strcpy( work, "非キャンペーンDROP対象テーブル取得失敗/FETCH");
+			send_err( m$sql_statment, 0, work, NULL, NULL, G_STATION );
+			return( ERROR );
+		}
+        if( sqlca.sqlcode == ORA_NOF ) {
+            break;
+        }
+        
+        
+        /*-------------------------------------------**
+        **  対象ファイル名に該当するテーブルを削除
+        **-------------------------------------------*/
+        /* 対象テーブルカウント数初期化 */
+        tb_cnt = 0;
+        
+        if( TSTFi_target_file_name != ORA_NULL ) {
+            /*-------------------------------------------**
+            **  対象ファイル存在チェック
+            **-------------------------------------------*/
+            G_POSITION = __LINE__;
+            EXEC SQL
+                SELECT 
+                    COUNT(*) 
+                INTO
+                    :tb_cnt
+                FROM 
+                    USER_TABLES
+                WHERE 
+                    TABLE_NAME = :TSTF_target_file_name
+                ;
+            if( sqlca.sqlcode < 0 ) {
+                EXEC SQL CLOSE cur6 ;
+				memset( work, 0x00, sizeof(work) );
+				strcpy( work, "対象ファイル情報カウント失敗/SELECT COUNT(*)");
+				send_err( m$sql_statment, 0, work, NULL, NULL, G_STATION );
+                return( ERROR );
+            }
+
+        	/* ------------------------------------------ */
+        	/* 外部データかをチェックしテーブル無しに変更 */
+        	/* ------------------------------------------ */
+	        tb_cnt=0;
+	        G_POSITION = __LINE__;
+	        EXEC SQL SELECT COUNT(*) INTO :tb_cnt
+	                   FROM TS_外部ファイル情報
+	                  WHERE ファイルID = :TSTF_proviso_name;
+	        if( sqlca.sqlcode < 0 ) {
+	            send_err( m$sql_statment, sqlca.sqlcode, "SELECT COUNT(*) FROM TS_外部ファイル情報", NULL, NULL, G_STATION );
+	            return( ERROR );
+	        }
+
+	        if( tb_cnt != 0 ) {
+	            G_POSITION = __LINE__;
+	            EXEC SQL UPDATE TS_外部ファイル情報
+	                        SET テーブル有無 = '0'
+	                      WHERE ファイルID = :TSTF_proviso_name;
+	            if( sqlca.sqlcode < 0 ) {
+	                send_err( m$sql_statment, sqlca.sqlcode, "UPDATE TS_外部ファイル情報 SET テーブル有無 = '0'", NULL, NULL, G_STATION );
+	                return( ERROR );
+	            }
+	            memset( work, 0x00, sizeof( work ) );
+	            strcpy( work, TSTF_proviso_name.arr );
+	            strcat( work, " 外部ファイルをテーブル無に変更しました." );
+	            send_err( m$message1, 0, work, NULL, NULL, G_STATION );
+	        }
+
+            /*-------------------------------------------**
+            **  対象ファイル名を取得したらDROP処理
+            **-------------------------------------------*/
+            if( tb_cnt != 0 ) {
+                memset( sqlcmd1, 0x00, sizeof(sqlcmd1) );
+                strcpy( sqlcmd1, "DROP TABLE " );
+                strcat( sqlcmd1, TSTF_target_file_name.arr );
+                
+  
+                /* 動的SQL実行 */
+                G_POSITION = __LINE__;
+                EXEC SQL EXECUTE IMMEDIATE :sqlcmd1 ;
+                if( sqlca.sqlcode < 0 ) {
+                    EXEC SQL CLOSE cur6 ;
+                    send_err( m$sql_statment, 0, sqlcmd1, NULL, NULL, G_STATION );
+                    return( ERROR );
+                }
+                
+                /* 削除メッセージ */
+                memset(work, 0x00, sizeof(work) );
+                sprintf(work, "テーブル「%s」を削除しました（非キャンペーン対象ファイル）", TSTF_target_file_name.arr);
+                send_err( m$message1, 0, work, NULL, NULL, G_STATION );
+            }
+        }
+
+        /*-------------------------------------------**
+        **  対象ファイル情報該当レコード削除処理
+        **-------------------------------------------*/
+        memset( sqlcmd2, 0x00, sizeof(sqlcmd2) );
+
+		strcpy( sqlcmd2, "DELETE FROM TS_対象ファイル情報 " );
+		strcat( sqlcmd2, "WHERE 対象ファイル名 = '" );
+		strcat( sqlcmd2, TSTF_target_file_name.arr );
+		strcat( sqlcmd2, "' " );
+        
+
+        /* 動的SQLの実行 */
+		G_POSITION = __LINE__ ;
+	    EXEC SQL EXECUTE IMMEDIATE :sqlcmd2 ;
+        if( sqlca.sqlcode < 0 ) {
+            EXEC SQL CLOSE cur6 ;
+            send_err( m$sql_statment, 0, sqlcmd2, NULL, NULL, G_STATION ) ;
+            return( ERROR ) ;
+        }
+    }
+
+    /*-------------------------------------------**
+    **  カーソルクローズ
+    **-------------------------------------------*/
+    EXEC SQL CLOSE cur6 ;
+    if( sqlca.sqlcode < 0 ) {
+        send_err( m$sql_statment, 0, "非キャンペーンDROP対象テーブル取得失敗/CLOSE cur6", NULL, NULL, G_STATION );
+        return( ERROR ) ;
+    }
+    
+    /*
+    **  コミットの発行
+    */
+    EXEC SQL COMMIT ;
+    
+    return( NORMAL );
+}
+
+
+
+/*==========================================================================*/
+/*                                                                          */
+/* MODULE NAME      : kyn_delete                                            */
+/*                                                                          */
+/* FUNCTION         : キャンペーンデータ削除処理                            */
+/*                                                                          */
+/* CALLING MODULE   : Main                                                  */
+/*                                                                          */
+/* CALLED MODULE    : send_err                                              */
+/*                                                                          */
+/* ENTRY POINT      :                                                       */
+/*                                                                          */
+/* INPUT            : なし                                                  */
+/*                  :                                                       */
+/*                                                                          */
+/*==========================================================================*/
+int kyn_delete( void )
+{
+/*--------------------------------------------------------------------------*/
+/*                      HOST VARIABLE DECLARATIONS (DB2)                    */
+/*--------------------------------------------------------------------------*/
+
+/*--------------------------------------------------------------------------*/
+/*                      LOCAL VARIABLE DECLARATIONS                         */
+/*--------------------------------------------------------------------------*/
+    char    work[256];      /* 文字列ワーク領域 */
+
+
+    /*----------------------------------------------------------------------**
+    **  変数初期化
+    **----------------------------------------------------------------------*/
+
+    
+    /*======================================================================**
+    **  削除対象のキャンペーン定義情報のデータ取得
+    **======================================================================*/
+    
+    strcpy( G_SQL, "削除キー（キャンペーンID、センタID）取得処理" );
+    G_POSITION = __LINE__;
+    EXEC SQL DECLARE cur4 CURSOR FOR 
+    
+        SELECT
+            センタID,
+            キャンペーンID 
+        FROM
+            TC_キャンペーン属性
+        WHERE
+                months_between(sysdate,キャンペーン終了日) > 36
+            AND キャンペーンステータス = '3' 
+            AND 削除フラグ = '0' 
+        ;
+ 
+    if( sqlca.sqlcode < 0 ) {
+        send_err( m$sql_statment, 0, "削除対象のキャンペーン定義情報取得失敗/DECLARE cur4",
+                    NULL, NULL, G_STATION );
+        return( ERROR );
+    }
+
+    G_POSITION = __LINE__;
+    EXEC SQL OPEN cur4;
+    if( sqlca.sqlcode < 0 ) {
+        send_err( m$sql_statment, 0, "削除対象のキャンペーン定義情報取得失敗/OPEN cur4",
+                    NULL, NULL, G_STATION );
+        return( ERROR );
+    }
+
+    /*-------------------------------------------*
+    **  対象のキャンペーン定義情報のデータが無くなるまでループ
+    **-------------------------------------------*/
+    for(;;) {
+        /* 取得領域の初期化 */
+        memset( TCCA_center_id,   0x00, sizeof( TCCA_center_id ) );
+        memset( TCCA_campaign_id, 0x00, sizeof( TCCA_campaign_id ) );
+        
+        /*-------------------------------------------*
+        **  フェッチ処理
+        **-------------------------------------------*/
+        strcpy( G_SQL, "削除キー（センタID、キャンペーンID)取得" );
+        G_POSITION = __LINE__;
+        
+        EXEC SQL FETCH cur4 
+            INTO 
+                :TCCA_center_id     :TCCAi_center_id,       /* センタID */
+                :TCCA_campaign_id   :TCCAi_campaign_id      /* キャンペーンID */
+            ;
+        
+        if( sqlca.sqlcode < 0 ) {
+            EXEC SQL CLOSE cur4;
+            send_err( m$sql_statment, 0, "削除対象のキャンペーン定義情報取得失敗/FETCH cur4",
+                        NULL, NULL, G_STATION );
+            return( ERROR );
+        }
+        
+        if( sqlca.sqlcode == ORA_NOF ) {
+            break;
+        }
+        
+
+        /*-------------------------------------------*
+        **  TC_キャンペーン商品の削除処理
+        **-------------------------------------------*/
+        strcpy( G_SQL, "キャンペーン商品削除処理" );
+        G_POSITION = __LINE__;
+        
+        EXEC SQL 
+            DELETE FROM
+                TC_キャンペーン商品
+            WHERE  
+                    センタID       = :TCCA_center_id 
+                AND キャンペーンID = :TCCA_campaign_id 
+            ;
+        
+        if (sqlca.sqlcode < 0) {
+            EXEC SQL CLOSE cur4;
+            send_err( m$sql_statment, 0, "キャンペーン商品削除処理失敗/DELETE キャンペーン商品",
+                        NULL, NULL, G_STATION );
+            return( ERROR ) ;
+        }
+        
+        /*-------------------------------------------*
+        **  TC_キャンペーン会話項目の削除処理
+        **-------------------------------------------*/
+        strcpy( G_SQL, "キャンペーン会話項目削除処理" );
+        G_POSITION = __LINE__;
+        
+        EXEC SQL 
+            DELETE FROM
+                TC_キャンペーン会話項目
+            WHERE  
+                    センタID       = :TCCA_center_id 
+                AND キャンペーンID = :TCCA_campaign_id 
+            ;
+        
+        if (sqlca.sqlcode < 0) {
+            EXEC SQL CLOSE cur4;
+            send_err( m$sql_statment, 0, "キャンペーン会話項目削除失敗/DELETE キャンペーン会話項目",
+                        NULL, NULL, G_STATION );
+            return( ERROR ) ;
+        }
+
+        
+        /*-------------------------------------------*
+        **  TC_キャンペーンTSRの削除処理
+        **-------------------------------------------*/
+        strcpy( G_SQL, "キャンペーンTSRの削除処理" );
+        G_POSITION = __LINE__;
+        
+        EXEC SQL 
+            DELETE FROM
+                TC_キャンペーンTSR
+            WHERE  
+                    センタID       = :TCCA_center_id 
+                AND キャンペーンID = :TCCA_campaign_id 
+            ;
+        
+        if (sqlca.sqlcode < 0) {
+            EXEC SQL CLOSE cur4;
+            send_err( m$sql_statment, 0, "キャンペーンTSRの削除処理失敗/DELETE キャンペーンTSR",
+                        NULL, NULL, G_STATION );
+            return( ERROR ) ;
+        }
+
+        
+        /*-------------------------------------------*
+        **  TC_TSR担当営業店の削除処理
+        **-------------------------------------------*/
+        
+        strcpy( G_SQL, "TSR担当営業店の削除処理" );
+        G_POSITION = __LINE__;
+        
+        EXEC SQL 
+            DELETE FROM
+                TC_TSR担当営業店
+            WHERE  
+                    センタID       = :TCCA_center_id 
+                AND キャンペーンID = :TCCA_campaign_id 
+            ;
+        
+        if (sqlca.sqlcode < 0  ) {
+            EXEC SQL CLOSE cur4;
+            send_err( m$sql_statment, 0, "TSR担当営業店の削除失敗/DELETE TSR担当営業店",
+                        NULL, NULL, G_STATION );
+            return( ERROR ) ;
+        }
+
+        
+        /*-------------------------------------------*
+        **  TC_グループ担当営業店の削除処理
+        **-------------------------------------------*/
+
+        strcpy( G_SQL, "TC_グループ担当営業店削除処理" );
+        G_POSITION = __LINE__;
+        
+        EXEC SQL 
+            DELETE FROM
+                TC_グループ担当営業店
+            WHERE  
+                    センタID       = :TCCA_center_id 
+                AND キャンペーンID = :TCCA_campaign_id  
+            ;
+        
+        if (sqlca.sqlcode < 0) {
+            EXEC SQL CLOSE cur4;
+            send_err( m$sql_statment, 0, "グループ担当営業店削除失敗/DELETE グループ担当営業店",
+                        NULL, NULL, G_STATION );
+            return( ERROR ) ;
+        }
+
+        
+        /*-------------------------------------------*
+        **  TC_コール優先順位の削除処理
+        **-------------------------------------------*/
+
+        strcpy( G_SQL, "コール優先順位削除処理" );      
+        G_POSITION = __LINE__;
+        
+        EXEC SQL 
+            DELETE FROM
+                TC_コール優先順位
+            WHERE  
+                    センタID       = :TCCA_center_id
+                AND キャンペーンID = :TCCA_campaign_id
+            ;
+        
+        if (sqlca.sqlcode < 0) {
+            EXEC SQL CLOSE cur4;
+            send_err( m$sql_statment, 0, "コール優先順位削除処理失敗/DELETE コール優先順位",
+                        NULL, NULL, G_STATION );
+            return( ERROR ) ;
+        }
+
+        
+        /*-------------------------------------------*
+        **  TC_キャンペーン属性・削除フラグ更新
+        **-------------------------------------------*/
+
+        strcpy( G_SQL, "キャンペーン属性削除フラグ更新処理" );
+        G_POSITION = __LINE__;
+        
+        EXEC SQL 
+            UPDATE 
+                TC_キャンペーン属性
+            SET 
+                削除フラグ = '1'
+            WHERE   
+                    センタID       = :TCCA_center_id
+                AND キャンペーンID = :TCCA_campaign_id
+            ;
+        
+        if ( sqlca.sqlcode < 0 ) {
+            EXEC SQL CLOSE cur4;
+            send_err( m$sql_statment, 0, "キャンペーン属性削除フラグ更新処理失敗/UPDATE キャンペーン属性",
+                        NULL, NULL, G_STATION );
+            return( ERROR ) ;
+        }
+        
+        memset(work,        0x00,   sizeof(work));
+        sprintf(work, "キャンペーン定義情報を削除しました（センタ：%s キャンペーン：%s）",
+             TCCA_center_id,TCCA_campaign_id);
+        send_err( m$message1, 0, work, NULL, NULL, G_STATION );
+
+    }
+
+    /*-------------------------------------------**
+    **  カーソルクローズ
+    **-------------------------------------------*/
+    EXEC SQL CLOSE cur4 ;
+    if( sqlca.sqlcode < 0 ) {
+        send_err( m$sql_statment, 0, "削除対象のキャンペーン定義情報取得失敗/CLOSE cur4",
+                    NULL, NULL, G_STATION );
+        return( ERROR ) ;
+    }
+
+    /*
+    **  コミットの発行
+    */
+    EXEC SQL COMMIT ;
+
+    return( NORMAL );
+
+}
+

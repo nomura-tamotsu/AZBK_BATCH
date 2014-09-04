@@ -1,0 +1,266 @@
+/*==========================================================================*/
+/* Copyright　Information Services International-Dentsu, Ltd.   　          */
+/*==========================================================================*/
+/*                                                                          */
+/* SYSTEM           : BANK・R－CC                                           */
+/*                                                                          */
+/* PROGRAM NAME     : テーブルの調整－顧客属性                              */
+/*                                                                          */
+/* MODULE NAME      : AdjustCustomer                                        */
+/*                                                                          */
+/* FUNCTION         : TF_住所に存在しない住所コードを                       */
+/*                    "00000000000"にリセットする。                         */
+/*                                                                          */
+/* CALLING MODULE   : Main Module.                                          */
+/*                                                                          */
+/* CALLED MODULE    : send_err, errhandler, db_connect                      */
+/*                                                                          */
+/* ENTRY POint      : Main Module.                                          */
+/*                                                                          */
+/* INPUT            : None                                                  */
+/*                                                                          */
+/* EXIT             : 正常終了       ・・・NORMAL(0)                        */
+/*                    異常終了       ・・・ERROR (9)                        */
+/*                                                                          */
+/* Mod   yy/mm/dd   Coder           Comment                                 */
+/*-----+----------+-------------+-------------------------------------------*/
+/* %00 | 09/07/02 | K.Miyahara  | First Edition.                            */
+/* %01 | 14/08/27 | ISID        | パフォーマンス改善                        */
+/*==========================================================================*/
+/*--------------------------------------------------------------------------*/
+/* Standard include specification                                           */
+/*--------------------------------------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/*---------------------------------------------------------------------------*/
+/* User defined include specification                                        */
+/*---------------------------------------------------------------------------*/
+#include "msg.h"
+#include "common.h"
+#include "batchcommon.h"
+
+EXEC SQL INCLUDE mbproc.h;
+
+/*--------------------------------------------------------------------------*/
+/*                            DEFINE STATEMENTS                             */
+/*--------------------------------------------------------------------------*/
+
+/*--------------------------------------------------------------------------*/
+/*                            EXTERNAL DECLARES                             */
+/*--------------------------------------------------------------------------*/
+char    process_name[43];
+char    g_work[1024];
+
+/*--------------------------------------------------------------------------*/
+/*                           STRUCT DECLARATIONS                            */
+/*--------------------------------------------------------------------------*/
+
+/*--------------------------------------------------------------------------*/
+/*                           SUBROUTNE DEFINITION                           */
+/*--------------------------------------------------------------------------*/
+extern int send_err();
+extern int db_connect();
+extern void errhandler();
+
+
+/****************************************************************************/
+/*                                                                          */
+/*                            PROCEDURE DIVISION                            */
+/*                                                                          */
+/****************************************************************************/
+
+/*--------------------------------------------------------------------------*/
+/*                              MAIN ROUTINE                                */
+/*--------------------------------------------------------------------------*/
+main()
+{
+/*--------------------------------------------------------------------------*/
+/*                      LOCAL VARIABLE DECLARATIONS                         */
+/*--------------------------------------------------------------------------*/
+    int     rc;
+    int     exitcode;
+
+/*==========================================================================*/
+/*      INITIALIZATION                                                      */
+/*==========================================================================*/
+
+	/*-----------------------------*/
+	/* Initialize environment      */
+	/*-----------------------------*/
+	rc = 0;
+    exitcode = NORMAL;
+
+	/*-----------------------------*/
+	/* Print process start message */
+	/*-----------------------------*/
+	strcpy( G_STATION, "AdjustCustomer" );
+
+	memset(process_name,0x00,sizeof(process_name));
+    strcpy(process_name,"テーブルの調整－顧客属性");
+
+    send_err( m$start_process, NORMAL, process_name, "", "", G_STATION );
+
+
+    /*-----------------------------*/
+    /* Setup error handler routine */
+    /*-----------------------------*/
+    EXEC SQL WHENEVER SQLERROR DO errhandler();
+
+	/*-----------------------------*/
+	/* Connect to database         */
+	/*-----------------------------*/
+    G_POSITION = __LINE__;
+    rc = db_connect();
+    if( rc != 0 ) {
+        send_err( m$db_connect, rc , NULL, NULL, NULL, G_STATION );
+        exitcode = ERROR;
+        goto ENDPROC;
+    }
+
+    /*======================================================================*/
+    /*                      メ　イ　ン　処　理                              */
+    /*======================================================================*/
+	/*--------------------------------------*/
+	/* 住所コードのリセット1 %01(SQLを分割) */
+	/*--------------------------------------*/
+	G_POSITION = __LINE__;
+	EXEC SQL
+		UPDATE 
+			TF_顧客属性
+		SET 
+			住所コード = '00000000000'
+		WHERE 
+			NOT EXISTS (
+				SELECT
+					*
+				FROM
+					TF_住所
+				WHERE
+					TF_顧客属性.住所コード = TF_住所.住所コード
+			)
+		;
+#if 0
+	EXEC SQL
+		UPDATE
+			TF_顧客属性
+		SET 
+			住所コード = '00000000000'
+		WHERE 
+			住所コード IS NULL 
+		;
+	if( sqlca.sqlcode < 0 ){
+		send_err( m$sql_statment, sqlca.sqlcode, "TF_顧客属性の更新1（住所コード）に失敗", NULL, NULL, G_STATION );
+		exitcode = ERROR ;
+		goto LOGOUT ;
+	}
+
+	/*--------------------------------------*/
+	/* 住所コードのリセット2 %01(SQLを分割) */
+	/*--------------------------------------*/
+	G_POSITION = __LINE__;
+	EXEC SQL
+		UPDATE
+			TF_顧客属性
+		SET 
+			住所コード = '00000000000'
+		WHERE 
+			住所コード <> '00000000000' AND
+			住所コード NOT IN ( SELECT 住所コード FROM TF_住所 )
+		;
+#endif
+
+	if( sqlca.sqlcode < 0 ){
+		send_err( m$sql_statment, sqlca.sqlcode, "TF_顧客属性の更新2（住所コード）に失敗", NULL, NULL, G_STATION );
+		exitcode = ERROR ;
+		goto LOGOUT ;
+	}
+
+	send_err(m$message1,0,"住所テーブルに存在しない住所コードをALL'0'にセットしました。",NULL,NULL,G_STATION);
+
+	/*--------------------------------------------*/
+	/* 連絡先住所コードのリセット1 %01(SQLを分割) */
+	/*--------------------------------------------*/
+	G_POSITION = __LINE__;
+	EXEC SQL
+		UPDATE 
+			TF_顧客属性
+		SET 
+			連絡先住所コード = '00000000000'
+		WHERE 
+			NOT EXISTS (
+				SELECT
+					*
+				FROM
+					TF_住所
+				WHERE
+					TF_顧客属性.連絡先住所コード = TF_住所.住所コード
+			)
+		;
+#if 0
+	G_POSITION = __LINE__;
+	EXEC SQL
+		UPDATE
+			TF_顧客属性
+		SET 
+			連絡先住所コード = '00000000000'
+		WHERE 
+			連絡先住所コード IS NULL
+		;
+	if( sqlca.sqlcode < 0 ){
+		send_err( m$sql_statment, sqlca.sqlcode, "TF_顧客属性の更新1（連絡先住所コード）に失敗", NULL, NULL, G_STATION );
+		exitcode = ERROR ;
+		goto LOGOUT ;
+	}
+
+	/*--------------------------------------------*/
+	/* 連絡先住所コードのリセット2 %01(SQLを分割) */
+	/*--------------------------------------------*/
+	G_POSITION = __LINE__;
+	EXEC SQL
+		UPDATE
+			TF_顧客属性
+		SET 
+			連絡先住所コード = '00000000000'
+		WHERE 
+			連絡先住所コード <> '00000000000' AND
+			連絡先住所コード NOT IN ( SELECT 住所コード FROM TF_住所 )
+		;
+#endif
+	if( sqlca.sqlcode < 0 ){
+		send_err( m$sql_statment, sqlca.sqlcode, "TF_顧客属性の更新2（連絡先住所コード）に失敗", NULL, NULL, G_STATION );
+		exitcode = ERROR ;
+		goto LOGOUT ;
+	}
+
+	send_err(m$message1,0,"住所テーブルに存在しない連絡先住所コードをALL'0'にセットしました。",NULL,NULL,G_STATION);
+
+	/*--------------------------------------------------------------------------*/
+	/*                              終了処理                                    */
+	/*--------------------------------------------------------------------------*/
+
+	/*
+	**  終了処理(DBログアウト)
+	*/
+LOGOUT:
+	if ( exitcode == NORMAL ) {
+		EXEC SQL COMMIT WORK RELEASE;
+	}
+	else {
+		EXEC SQL ROLLBACK WORK RELEASE;
+	}
+
+	/*
+	**  終了処理
+	*/
+ENDPROC:
+    if ( exitcode == NORMAL ){
+		send_err( m$stop_process, NORMAL, process_name, "", "", G_STATION );  
+    }
+	else {
+		send_err( m$abend_process, ERROR, process_name, "", "", G_STATION );
+	}
+
+    exit(exitcode);
+}
