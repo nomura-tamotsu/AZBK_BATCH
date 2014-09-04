@@ -1,0 +1,1613 @@
+/*==========================================================================*/
+/* Copyright　Information Services International-Dentsu, Ltd.   　          */
+/*==========================================================================*/
+/*                                                                          */
+/* SYSTEM           : BANK・R－CC                                           */
+/*                                                                          */
+/* PROGRAM NAME     : 個別明細定期性預金差分更新処理                        */
+/*                                                                          */
+/* MODULE NAME      : DailyTermDeposit                                      */
+/*                                                                          */
+/* FUNCTION         : 個別明細定期性預金の差分更新処理を行う                */
+/*                                                                          */
+/*                                                                          */
+/* CALLING MODULE   : Main Module.                                          */
+/*                                                                          */
+/* CALLED MODULE    : send_err, errhandler, db_connect                      */
+/*                                                                          */
+/* ENTRY POint      : Main Module.                                          */
+/*                                                                          */
+/* INPUT            : argv[1]・・個別明細定期性預金差分更新ファイル(ﾌﾙﾊﾟｽ)  */
+/*                  : argv[2]・・処理結果ファイル名(ﾌﾙﾊﾟｽ)                  */
+/*                                                                          */
+/* EXIT             : 正常終了       ・・・NORMAL(0)                        */
+/*                    異常終了       ・・・ERROR (9)                        */
+/*                                                                          */
+/* Mod   yy/mm/dd   Coder           Comment                                 */
+/*-----+----------+-------------+-------------------------------------------*/
+/* %00 | 14/04/14 | ISID        | First Edition.                            */
+/* %01 | 14/08/25 | ISID        | パフォーマンス改善                        */
+/*==========================================================================*/
+/*---------------------------------------------------------------------------*/
+/* Standard include specification                                            */
+/*---------------------------------------------------------------------------*/
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <ctype.h>
+#include <errno.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <time.h>
+
+/*---------------------------------------------------------------------------*/
+/* User defined include specification                                        */
+/*---------------------------------------------------------------------------*/
+#include "msg.h"
+#include "common.h"
+#include "batchcommon.h"
+#include "apl_common.h"
+
+EXEC SQL INCLUDE mbproc.h;
+
+/*---------------------------------------------------------------------------*/
+/* Internal macro definition                                                 */
+/*---------------------------------------------------------------------------*/
+
+typedef struct _RECV_FILE_DATA {
+    char    record_id               [  1];      /* 処理区分 */
+    char    branch_id               [  3];      /* 店番 */
+    char    cifno                   [ 10];      /* CIFNO */
+    char    setai_no                [ 11];      /* 世帯番号 */
+    char    kojin_no                [ 11];      /* 個人番号 */
+    char    accnt_id                [  6];      /* 科目ID */
+    char    koza_no                 [  8];      /* 口座番号 */
+    char    kuchi_no                [  5];      /* 口番号 */
+    char    eda_no                  [  5];      /* 枝番号 */
+    char    zandaka                 [ 16];      /* 口座残高 */
+    char    soshiki_id              [  7];      /* 取扱店部課 */
+    char    start_day               [  8];      /* 口座開設年月日 */
+    char    tusho_id                [  2];      /* 通証区分ID */
+    char    zei_id                  [  2];      /* 税区分ID */
+    char    kingaku                 [ 16];      /* 金額 */
+    char    azukeire_date           [  8];      /* 預入日 */
+    char    manki_date              [  8];      /* 満期日 */
+    char    azukeire_term           [  5];      /* 預入期間 */
+    char    rate                    [ 12];      /* 適用利率 */
+    char    shohin_id               [ 10];      /* 商品ID */
+    char    inin_id                 [  2];      /* 委任ID */
+    char    yoyaku_sign             [  1];      /* 満期予約サイン */
+    char    trade_date              [  8];      /* 最近取引日 */
+    char    data_date               [  8];      /* データ基準日 */
+    char    yobi                    [ 82];      /* 予備 */
+    char    lf                      [  1];      /* 改行コード */
+} RECV_FILE_DATA;
+
+typedef struct _COUNT {
+    int  iRecNum;                              /* 処理レコード件数           */
+    int  iOkNum ;                              /* 正常終了レコード件数       */
+    int  iOkNumW;                              /* (未commit分)               */
+    int  iInsNum;                              /* 正常(うち登録レコード件数) */
+    int  iInsNumW;                             /* (未commit分)               */
+    int  iUpdNum;                              /* 正常(うち登録レコード件数) */
+    int  iUpdNumW;                             /* (未commit分)               */
+    int  iDelNum;                              /* 正常(うち削除レコード件数) */
+    int  iDelNumW;                             /* (未commit分)               */
+    int  iNgNum ;                              /* 異常終了レコード件数       */
+} COUNT;
+
+/*---------------------------------------------------------------------------*/
+/* User Local defined  specification                                         */
+/*---------------------------------------------------------------------------*/
+#define L_WRITE_END                     1
+#define L_WRITE_LOG                     0
+
+/*---------------------------------------------------------------------------*/
+/* Global variable specification                                             */
+/*---------------------------------------------------------------------------*/
+/* 設定ファイル項目（ホスト変数以外）*/
+char g_szRecvFile       [AP_CONFIG_LINE];            /* 差分更新ファイル     */
+char g_szLogFile        [AP_CONFIG_LINE];            /* 処理結果ファイル     */
+
+FILE *g_pfRecvFile;
+FILE *g_pfLogFile;
+char g_szSyoriDate      [  9];                       /* 処理基準日           */
+long g_iCommitSU;                                    /* 分割コミット件数保持 */
+char g_RecordID[2];                                  /* 変更区分             */
+
+
+char g_szDtlMsg           [AP_C_NOTE_LEN_H];         /* 事象詳細文字列       */
+
+char    process_name[43];
+char    g_work[1024];
+
+int file_open_flag1  = 0;		/* ファイルオープンフラグ(データファイル用) */
+int file_open_flag2  = 0;		/* ファイルオープンフラグ(処理結果ファイル用)  */
+
+/*---------------------------------------------------------------------------*/
+/* Host Variable                                                             */
+/*---------------------------------------------------------------------------*/
+EXEC SQL INCLUDE SQLCA;
+EXEC SQL BEGIN DECLARE SECTION;
+    /* ＤＢ接続情報 */
+    char h_DB2DBNAME         [ 8];                   /* ＤＢ名               */
+    char h_DB2SCHEMA         [ 8];                   /* スキーマ名           */
+    char sqlcmd[2048];
+    char sqlcmd_del[1024];
+
+/* TF_個別明細固定性預金テーブル  */
+    char  h_BranchNo[4];                             /* 店番                 */
+    short hi_BranchNo;
+    char  h_CIF[11];                                 /* CIFNO                */
+    short hi_CIF;
+    char  h_SetaNo[14];                              /* 世帯番号             */
+    short hi_SetaNo;
+    char  h_KojinNo[14];                             /* 個人企業番号         */
+    short hi_KojinNo;
+    char  h_AccntID[7];                              /* 科目ID               */
+    short hi_AccntID;
+    char  h_KozaNo[9];                               /* 口座番号             */
+    short hi_KozaNo;
+    char  h_KuchiNo[6];                              /* 口番号               */
+    short hi_KuchiNo;
+    char  h_EdaNo[6];                                /* 枝番号               */
+    short hi_EdaNo;
+    char  h_ShohinID[11];                            /* 商品ID               */
+    short hi_ShohinID;
+    char  h_Azukeire_Date[9];                        /* 預入日               */
+    short hi_Azukeire_Date;
+    char  h_ZeiID[5];                                /* 税区分ID             */
+    short hi_ZeiID;
+    char  h_Kingaku[17];                             /* 金額                 */
+    short hi_Kingaku;
+    char  h_Rate[13];                                /* 利率                 */
+    short hi_Rate;
+    char  h_MankiDate[9];                            /* 満期日               */
+    short hi_MankiDate;
+    char  h_Zandaka[17];                             /* 口座残高             */
+    short hi_Zandaka;
+    char  h_SoshikiID[8];                            /* 取扱店部課           */
+    short hi_SoshikiID;
+    char  h_StartDay[9];                             /* 口座開設年月日       */
+    short hi_StartDay;
+    char  h_TushoID[5];                              /* 通証区分ID           */
+    short hi_TushoID;
+    char  h_Azukeire_Term[6];                        /* 預入期間             */
+    short hi_Azukeire_Term;
+    char  h_IninID[5];                               /* 委任ID               */
+    short hi_IninID;
+    char  h_YoyakuSign[2];                           /* 満期予約サイン       */
+    short hi_YoyakuSign;
+    char  h_TradeDate[9];                            /* 最終取引日           */
+    short hi_TradeDate;
+    char  h_DataDate[9];                             /* データ基準日         */
+    short hi_DataDate;
+
+    long h_DATA_COUNT;
+
+EXEC SQL END DECLARE SECTION;
+
+/*---------------------------------------------------------------------------*/
+/* Internal function prototype                                               */
+/*---------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+/*  #5                       SUBROUTNE DEFINITION                           */
+/*--------------------------------------------------------------------------*/
+extern int send_err();
+extern void errhandler();
+extern int db_connect();
+void rtrim();
+void dump();
+
+static void initialize( int ac, char *av[] );
+static int  checkFilles( RECV_FILE_DATA *pData, char *g_szDtlMsg );
+static int  checkData( char *pcheck_data, int data_size, char *pmsg,
+                       char *pchange_data, char *g_szDtlMsg );
+static int  insertTables( char *g_szDtlMsg );
+static int  updateTables( char *g_szDtlMsg );
+static void setUpdateText( int type, char *psqlcmd, short idata, char *pitem, char *pdata );
+static int  deleteTables( char *g_szDtlMsg );
+static int  commit( void );
+static int  rollback( void );
+static int  putAcctLogFile(int tp,RECV_FILE_DATA *pData,COUNT *dCount,int rc, char *g_szDtlMsg );
+static void finalize( int rc, int iRecNum, int iOkNum );
+
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   int main( int argc, char *argv[] )                                      */
+/*                                                                           */
+/* Made by:                                                                  */
+/* Description:                                                              */
+/*      メイン処理                                                           */
+/*                                                                           */
+/* Arguments:                                                                */
+/* Type     Name              I/O    Content                                 */
+/* -------- ----------------- --- ------------------------------------------ */
+/*    int    argc              I  引数の数                                   */
+/*    char  *argv[]                                                          */
+/*                    argv[1]  I  個別明細定期性預金差分更新ファイル(ﾌﾙﾊﾟｽ)  */
+/*                    argv[2]  I  処理結果ファイル名(ﾌﾙﾊﾟｽ)                  */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+int main( int argc, char *argv[] )
+{
+	int     exit_code = NORMAL;
+	int		rc = NORMAL;
+	unsigned int RecvSt;
+
+
+    RECV_FILE_DATA    dData;                         /* データ・レコード     */
+    COUNT             dCount; 
+    long              iCommitCnt;                  /* 分割コミット用カウンタ */
+
+    int               rc_fin;
+
+
+
+	/*-----------------------------*/
+    /* Print process start message */
+    /*-----------------------------*/
+
+    strcpy( G_STATION, "DailyTermDeposit" );
+	
+	memset(process_name,0x00,sizeof(process_name));
+    strcpy(process_name,"日次定期性預金差分データ取込処理");
+
+    send_err( m$start_process, NORMAL, process_name, "", "", G_STATION );
+
+    memset( &dCount, 0x00, sizeof( dCount ) );
+    iCommitCnt = 0;
+
+    /*-------------------------------------------------------*/
+    /* Setup error handler routine                           */
+    /*-------------------------------------------------------*/
+    EXEC SQL WHENEVER SQLERROR DO errhandler();
+
+    G_POSITION = __LINE__;
+    rc = db_connect() ;
+    if ( rc != NORMAL ) {
+        send_err( m$db_connect, rc, "", "", "", G_STATION );
+        rc = ERROR ;
+        goto ENDPROC ;
+    }
+
+    /* ---------- */
+    /* 初期化処理 */
+    /* ---------- */
+    initialize( argc, argv );
+
+
+
+
+
+
+    while( 1 ) {
+        memset( g_szDtlMsg, 0x00, sizeof( g_szDtlMsg ) );
+
+        /* -------------------------------------------- */
+        /* 個別明細定期性預金差分更新ファイルからの読込 */
+        /* -------------------------------------------- */
+		RecvSt = (unsigned int)fread( (char *) &dData, sizeof( RECV_FILE_DATA ), 1, g_pfRecvFile );
+
+		if (RecvSt != 1) {
+			if (feof( g_pfRecvFile ) != 0) {
+				rc = NORMAL;
+				break;
+			}
+			else{
+				sprintf(g_szDtlMsg,"個別明細定期性預金差分更新ファイル(%s)の読込に失敗しました。",g_szRecvFile);
+				send_err ( m$file_read, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+
+				rc = ERROR;
+				break;
+			}
+		}
+		else{
+			rc = NORMAL;
+		}
+
+        dCount.iRecNum++;
+
+        /* １万レコード毎にメッセージ出力 */
+        if ( (dCount.iRecNum % 10000) == 0 ){
+			sprintf ( g_szDtlMsg ,"[%d]レコード処理完了。。。", dCount.iRecNum);
+			send_err ( m$message1, 0, g_szDtlMsg, NULL, NULL, G_STATION);
+        }
+
+        /* ------------------------------------------------ */
+        /* 個別明細定期性預金差分更新ファイルからのチェック */
+        /* ------------------------------------------------ */
+        if ( (rc = checkFilles( &dData, g_szDtlMsg )) != NORMAL ){
+            goto WriteFile;
+        }
+
+        /* -------------- */
+        /* 処理区分：新規 */
+        /* -------------- */
+        if ( atoi(g_RecordID) == AP_C_SYORI_NEW ){
+            if ( ( rc = insertTables(g_szDtlMsg) ) != NORMAL ){
+                goto WriteFile;
+            }
+            dCount.iInsNumW++;
+            dCount.iOkNumW++;
+        }
+        /* -------------- */
+        /* 処理区分：変更 */
+        /* -------------- */
+        else if ( atoi(g_RecordID) == AP_C_SYORI_UPDATE ) {
+            if ( ( rc = updateTables(g_szDtlMsg) ) != NORMAL ){
+                goto WriteFile;
+            }
+            dCount.iUpdNumW++;
+            dCount.iOkNumW++;
+        }
+        /* -------------- */
+        /* 処理区分：削除 */
+        /* -------------- */
+        else if ( atoi(g_RecordID) == AP_C_SYORI_DELETE ) {
+            if ( ( rc = deleteTables(g_szDtlMsg) ) != NORMAL ){
+                goto WriteFile;
+            }
+            dCount.iDelNumW++;
+            dCount.iOkNumW++;
+        }
+
+        iCommitCnt++;                      /* 差分ファイルの処理件数 */
+
+#if 0
+
+		/* 再ランできないのでここでのCOMMITを削除 */
+        /* 指定件数に到達したらＤＢのコミット */
+        if ( iCommitCnt == g_iCommitSU) {
+            dCount.iOkNum = dCount.iOkNum + dCount.iOkNumW;
+            dCount.iInsNum = dCount.iInsNum + dCount.iInsNumW;
+            dCount.iUpdNum = dCount.iUpdNum + dCount.iUpdNumW;
+            dCount.iDelNum = dCount.iDelNum + dCount.iDelNumW;
+            iCommitCnt = 0;
+            dCount.iOkNumW = 0;
+            dCount.iInsNumW = 0;
+            dCount.iUpdNumW = 0;
+            dCount.iDelNumW = 0;
+
+            if ((rc = commit(g_szDtlMsg)) != NORMAL ){
+                goto WriteFile;
+            }
+        }
+#endif
+
+
+WriteFile:
+        if ( rc == ERROR ){
+            dCount.iOkNumW = 0;
+            dCount.iInsNumW = 0;
+            dCount.iUpdNumW = 0;
+            dCount.iDelNumW = 0;
+            rollback();
+            iCommitCnt = 0;
+			dCount.iNgNum++;
+        }
+
+        /* ログ出力 */
+        putAcctLogFile(L_WRITE_LOG, &dData, &dCount, rc, g_szDtlMsg );
+        if ( rc == ERROR ){
+            break;
+        }
+
+    } /* while loop end */
+
+
+    if( rc == NORMAL && dCount.iRecNum == 0 ){
+		sprintf ( g_szDtlMsg, "個別明細定期性預金差分更新ファイル(%s)は０件ファイルです。", g_szRecvFile );
+		send_err (m$message1, NORMAL, g_szDtlMsg, NULL, NULL, G_STATION);
+    }
+
+
+    if ( rc != NORMAL ) {
+        rollback();
+    }
+    else{
+        /* ＤＢのコミット */
+        if( iCommitCnt > 0 ){
+            dCount.iOkNum  = dCount.iOkNum  + iCommitCnt;
+            dCount.iInsNum = dCount.iInsNum + dCount.iInsNumW;
+            dCount.iUpdNum = dCount.iUpdNum + dCount.iUpdNumW;
+            dCount.iDelNum = dCount.iDelNum + dCount.iDelNumW;
+            rc = commit();
+        }
+    }
+
+
+    rc_fin = putAcctLogFile(L_WRITE_END, &dData, &dCount, rc, g_szDtlMsg );
+    if (rc == NORMAL){
+        rc = rc_fin;
+    }
+
+
+
+
+ENDPROC:
+
+	if ( rc == NORMAL ) {
+        send_err( m$stop_process, NORMAL, process_name, "", "", G_STATION );
+    } else {
+        send_err( m$abend_process, ERROR, process_name, "", "", G_STATION );
+    }
+
+	finalize( rc, dCount.iRecNum, dCount.iOkNum );
+
+}
+
+
+/*==========================================================================*/
+/* FUNCTION NAME  : initialize                                              */
+/*                                                                          */
+/* FUNCTION       : 初期化処理                                              */
+/*                                                                          */
+/*                : 戻り値     無し                                         */
+/*                                                                          */
+/*==========================================================================*/
+static void initialize( int ac, char *av[] )
+{
+	int exit_code=NORMAL;
+
+    /* コミット件数の取得 */
+    g_iCommitSU = 100;
+
+
+    /* 起動パラメータを使用する */
+    if ( ac == 3 ) {
+        strcpy(g_szRecvFile,  av[1]); /* 個別明細定期性預金差分更新ファイル    */
+        strcpy(g_szLogFile,   av[2]); /* 処理結果ファイル                      */
+    }
+    else {
+		sprintf (g_szDtlMsg,"個別明細定期性預金差分更新ファイル 処理結果ファイル");
+		send_err (m$invalid_parameter, ERROR, g_szDtlMsg, NULL, NULL, G_STATION);
+		exit_code = ERROR;
+		goto initialize_end;
+    }
+
+
+    /* 差分更新ファイルのオープン */
+    if(( g_pfRecvFile = fopen( g_szRecvFile, "r" )) == NULL ) {
+		sprintf( g_szDtlMsg, "ファイル%sのオープンに失敗しました。", g_szRecvFile );
+		send_err( m$file_open, errno, g_szDtlMsg, NULL, NULL, G_STATION );
+		exit_code = ERROR;
+		goto initialize_end;
+
+    }
+	file_open_flag1 =1;
+
+    /* 処理結果ファイルへのオープン */
+    if (( g_pfLogFile = fopen( g_szLogFile, "w" )) == NULL ) {
+		sprintf( g_szDtlMsg, "ファイル%sのオープンに失敗しました。", g_szLogFile );
+		send_err( m$file_open, errno, g_szDtlMsg, NULL, NULL, G_STATION );
+
+		exit_code = ERROR;
+		goto initialize_end;
+    }
+	file_open_flag2 =1;
+
+initialize_end:
+
+	if ( exit_code != NORMAL ) {
+		send_err( m$abend_process, ERROR, process_name, "", "", G_STATION );
+		exit ( exit_code );    
+	}
+
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   int checkFilles( RECV_FILE_DATA *pData,char *g_szDtlMsg )               */
+/*                                                                           */
+/* Description:                                                              */
+/*   各種チェック                                                            */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  --------------------------------------- */
+/* RECV_FILE_DATA  *pData        I   個別明細定期性預金差分ファイル格納エリア*/
+/* g_szDtlMsg       char*        I                                           */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   None                                                                    */
+/*                                                                           */
+/* Return Code:                                                              */
+/*        NORMAL: 正常                                                       */
+/*        ERROR : データ不正                                                 */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int checkFilles( RECV_FILE_DATA *pData, char *g_szDtlMsg )
+{
+
+    int rc = 0;
+
+    memset( g_RecordID, 0x00, sizeof(g_RecordID) );
+
+    /* --------------------------------------- */
+    /* TF_個別明細固定性預金のホスト変数初期化 */
+    /* --------------------------------------- */
+    /* 店番 */
+    memset( h_BranchNo, 0x00, sizeof(h_BranchNo) );
+    hi_BranchNo=ORA_NULL;
+
+    /* CIFNO */
+    memset( h_CIF, 0x00, sizeof(h_CIF) );
+    hi_CIF=ORA_NULL;
+    
+    /* 世帯番号 */
+    memset( h_SetaNo, 0x00, sizeof(h_SetaNo) );
+    hi_SetaNo=ORA_NULL;
+    
+    /* 個人企業番号 */
+    memset( h_KojinNo, 0x00, sizeof(h_KojinNo) );
+    hi_KojinNo=ORA_NULL;
+    
+    /* 科目ID */
+    memset( h_AccntID, 0x00, sizeof(h_AccntID) );
+    hi_AccntID=ORA_NULL;
+    
+    /* 口座番号 */
+    memset( h_KozaNo, 0x00, sizeof(h_KozaNo) );
+    hi_KozaNo=ORA_NULL;
+
+    /* 口番号 */
+    memset( h_KuchiNo, 0x00, sizeof(h_KuchiNo) );
+    hi_KuchiNo=ORA_NULL;
+    
+    /* 枝番号 */
+    memset( h_EdaNo, 0x00, sizeof(h_EdaNo) );
+    hi_EdaNo=ORA_NULL;
+    
+    /* 商品ID */
+    memset( h_ShohinID, 0x00, sizeof(h_ShohinID) );
+    hi_ShohinID=ORA_NULL;
+    
+    /* 預入日 */
+    memset( h_Azukeire_Date, 0x00, sizeof(h_Azukeire_Date) );
+    hi_Azukeire_Date=ORA_NULL;
+
+    /* 税区分ID */
+    memset( h_ZeiID, 0x00, sizeof(h_ZeiID) );
+    hi_ZeiID=ORA_NULL;
+
+    /* 金額 */
+    memset( h_Kingaku, 0x00, sizeof(h_Kingaku) );
+    hi_Kingaku=ORA_NULL;
+
+    /* 利率 */
+    memset( h_Rate, 0x00, sizeof(h_Rate) );
+    hi_Rate=ORA_NULL;
+
+    /* 満期日 */
+    memset( h_MankiDate, 0x00, sizeof(h_MankiDate) );
+    hi_MankiDate=ORA_NULL;
+
+    /* 口座残高 */
+    memset( h_Zandaka, 0x00, sizeof(h_Zandaka) );
+    hi_Zandaka=ORA_NULL;
+
+    /* 取扱店部課 */
+    memset( h_SoshikiID, 0x00, sizeof(h_SoshikiID) );
+    hi_SoshikiID=ORA_NULL;
+
+    /* 口座開設年月日 */
+    memset( h_StartDay, 0x00, sizeof(h_StartDay) );
+    hi_StartDay=ORA_NULL;
+
+    /* 通証区分ID */
+    memset( h_TushoID, 0x00, sizeof(h_TushoID) );
+    hi_TushoID=ORA_NULL;
+
+    /* 預入期間 */
+    memset( h_Azukeire_Term, 0x00, sizeof(h_Azukeire_Term) );
+    hi_Azukeire_Term=ORA_NULL;
+
+    /* 委任ID */
+    memset( h_IninID, 0x00, sizeof(h_IninID) );
+    hi_IninID=ORA_NULL;
+
+    /* 満期予約サイン */
+    memset( h_YoyakuSign, 0x00, sizeof(h_YoyakuSign) );
+    hi_YoyakuSign=ORA_NULL;
+
+    /* 最終取引日 */
+    memset( h_TradeDate, 0x00, sizeof(h_TradeDate) );
+    hi_TradeDate=ORA_NULL;
+
+    /* データ基準日 */
+    memset( h_DataDate, 0x00, sizeof(h_DataDate) );
+    hi_DataDate=ORA_NULL;
+
+
+
+    /* -------------------------------------------- */
+    /* 個別明細定期性預金差分更新ファイルのチェック */
+    /* ホスト変数へのデータセット                   */
+    /* -------------------------------------------- */
+
+    /* 改行コード */
+    if( pData->lf[0] != 0x0a ) {
+        strcpy( g_szDtlMsg,
+                "個別明細定期性預金差分ファイルに改行コードの設定がありません。");
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+
+    /* 処理区分 */
+    if( pData->record_id[0] == 0x00 || pData->record_id[0] == 0x20 ) {
+        strcpy( g_szDtlMsg, "処理区分の設定がありません。");
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+    else {
+        memcpy( g_RecordID, pData->record_id, sizeof(pData->record_id) );
+        if ( atoi(g_RecordID) < AP_C_SYORI_NEW ||
+             atoi(g_RecordID) > AP_C_SYORI_DELETE ){
+            sprintf( g_szDtlMsg,
+                     "個別明細定期性預金差分ファイルの処理区分(%s)が異常です。",
+                     g_RecordID);
+            send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+            return(ERROR);
+        }
+    }
+
+    /* 店番 */
+    rc = checkData(pData->branch_id, sizeof(pData->branch_id),
+                   "店番", h_BranchNo, g_szDtlMsg);
+    if (rc != NORMAL){
+        return(ERROR);
+    }
+    else {
+        hi_BranchNo=ORA_NOT_NULL;
+    }
+
+    /* CIFNO */
+    rc = checkData(pData->cifno, sizeof(pData->cifno),
+                   "CIFNO", h_CIF, g_szDtlMsg);
+    if (rc != NORMAL){
+        return(ERROR);
+    }
+    else {
+        hi_CIF=ORA_NOT_NULL;
+    }
+
+    /* 世帯番号 */
+    rc = checkData(pData->setai_no, sizeof(pData->setai_no),
+                   "世帯番号", h_SetaNo, g_szDtlMsg);
+    if (rc != NORMAL){
+        return(ERROR);
+    }
+    else {
+        hi_SetaNo=ORA_NOT_NULL;
+    }
+
+    /* 個人番号 */
+    rc = checkData(pData->kojin_no, sizeof(pData->kojin_no),
+                   "個人番号", h_KojinNo, g_szDtlMsg);
+    if (rc != NORMAL){
+        return(ERROR);
+    }
+    else {
+        hi_KojinNo=ORA_NOT_NULL;
+    }
+
+    /* 科目ID */
+    rc = checkData(pData->accnt_id, sizeof(pData->accnt_id),
+                   "科目ID", h_AccntID, g_szDtlMsg);
+    if (rc != NORMAL){
+        return(ERROR);
+    }
+    else {
+        hi_AccntID=ORA_NOT_NULL;
+    }
+
+    /* 口座番号 */
+    rc = checkData(pData->koza_no, sizeof(pData->koza_no),
+                   "口座番号", h_KozaNo, g_szDtlMsg);
+    if (rc != NORMAL){
+        return(ERROR);
+    }
+    else {
+        hi_KozaNo=ORA_NOT_NULL;
+    }
+
+    /* 口番号 */
+    rc = checkData(pData->kuchi_no, sizeof(pData->kuchi_no),
+                   "口番号", h_KuchiNo, g_szDtlMsg);
+    if (rc != NORMAL){
+        return(ERROR);
+    }
+    else {
+        hi_KuchiNo=ORA_NOT_NULL;
+    }
+
+    /* 枝番号 */
+    rc = checkData(pData->eda_no, sizeof(pData->eda_no), "枝番号", h_EdaNo, g_szDtlMsg);
+    if (rc != NORMAL){
+        return(ERROR);
+    }
+    else {
+        hi_EdaNo=ORA_NOT_NULL;
+    }
+
+
+    /* 個別明細固定性預金テーブル確認 */
+    h_DATA_COUNT = 0;                          /* 個別明細固定性預金カウント */
+
+	G_POSITION = __LINE__;
+    EXEC SQL SELECT COUNT(*) INTO :h_DATA_COUNT FROM TF_個別明細固定性預金
+        WHERE
+             CIFNO = :h_CIF
+         AND 科目ID = :h_AccntID
+         AND 口座番号 = :h_KozaNo
+         AND 口座口番号 = :h_KuchiNo
+         AND 枝番号 = :h_EdaNo;
+
+/*
+	printf("CIFNO=[%s]\n",h_CIF);
+	printf("h_DATA_COUNT=%d\n",h_DATA_COUNT);
+*/
+
+	if (sqlca.sqlcode != 0 && sqlca.sqlcode != ORA_NOF){
+        sprintf( g_szDtlMsg,
+                 "[CIFNO=%s 科目=%s 口座=%s 口=%s 枝=%s]TF_個別明細固定性預金の検索に失敗しました。(sqlca.sqlcode=%d)",
+                  h_CIF, h_AccntID, h_KozaNo, h_KuchiNo, h_EdaNo, sqlca.sqlcode );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+		send_err ( m$sql_statment, sqlca.sqlcode, "SELECT COUNT(*) TF_個別明細固定性預金", NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+
+    if ( (atoi(g_RecordID) == AP_C_SYORI_NEW && h_DATA_COUNT > 0) ){
+        sprintf( g_szDtlMsg,
+                 "[CIFNO=%s 科目=%s 口座=%s 口=%s 枝=%s]既にTF_個別明細固定性預金に存在するデータです。",
+                  h_CIF, h_AccntID, h_KozaNo, h_KuchiNo, h_EdaNo );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+    if ( (atoi(g_RecordID) == AP_C_SYORI_UPDATE && h_DATA_COUNT == 0) ||
+         (atoi(g_RecordID) == AP_C_SYORI_DELETE && h_DATA_COUNT == 0) ){
+        sprintf( g_szDtlMsg,
+                 "[CIFNO=%s 科目=%s 口座=%s 口=%s 枝=%s]TF_個別明細固定性預金に存在しないデータです。",
+                  h_CIF, h_AccntID, h_KozaNo, h_KuchiNo, h_EdaNo);
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+
+    /* 処理区分＝削除はここまで */
+    if ( atoi(g_RecordID) == AP_C_SYORI_DELETE ){
+        return(NORMAL);
+    }
+
+    /* 口座残高 */
+    rc = checkData(pData->zandaka, sizeof(pData->zandaka),
+                   "口座残高", h_Zandaka, g_szDtlMsg);
+    if (rc != NORMAL){
+        return(ERROR);
+    }
+    else {
+        hi_Zandaka=ORA_NOT_NULL;
+    }
+
+    /* 取扱店部課 値なし許可 */
+    if ( pData->soshiki_id[0] != 0x00 && pData->soshiki_id[0] != 0x20 ) {
+        memcpy( h_SoshikiID, pData->soshiki_id, sizeof(pData->soshiki_id) );
+        rtrim( h_SoshikiID );
+        hi_SoshikiID=ORA_NOT_NULL;
+    }
+
+    /* 口座開設年月日 値なし許可 */
+    if ( pData->start_day[0] != 0x00 && pData->start_day[0] != 0x20 ) {
+        memcpy( h_StartDay, pData->start_day, sizeof(pData->start_day) );
+        rtrim( h_StartDay );
+        hi_StartDay=ORA_NOT_NULL;
+    }
+
+    /* 通証区分ID 値なし許可 */
+    if ( pData->tusho_id[0] != 0x00 && pData->tusho_id[0] != 0x20 ) {
+        memcpy( h_TushoID, pData->tusho_id, sizeof(pData->tusho_id) );
+        rtrim( h_TushoID );
+        hi_TushoID=ORA_NOT_NULL;
+    }
+
+    /* 税区分ID 値なし許可 */
+    if ( pData->zei_id[0] != 0x00 && pData->zei_id[0] != 0x20 ) {
+        memcpy( h_ZeiID, pData->zei_id, sizeof(pData->zei_id) );
+        rtrim( h_ZeiID );
+        hi_ZeiID=ORA_NOT_NULL;
+    }
+
+    /* 金額 */
+    rc = checkData(pData->kingaku, sizeof(pData->kingaku),
+                   "金額", h_Kingaku, g_szDtlMsg);
+    if (rc != NORMAL){
+        return(ERROR);
+    }
+    else {
+        hi_Kingaku=ORA_NOT_NULL;
+    }
+
+    /* 預入日 値なし許可 */
+    if ( pData->azukeire_date[0] != 0x00 && pData->azukeire_date[0] != 0x20 ) {
+        memcpy( h_Azukeire_Date, pData->azukeire_date, sizeof(pData->azukeire_date) );
+        rtrim( h_Azukeire_Date );
+        hi_Azukeire_Date=ORA_NOT_NULL;
+    }
+
+    /* 満期日 値なし許可 */
+    if ( pData->manki_date[0] != 0x00 && pData->manki_date[0] != 0x20 ) {
+        memcpy( h_MankiDate, pData->manki_date, sizeof(pData->manki_date) );
+        rtrim( h_MankiDate );
+        hi_MankiDate=ORA_NOT_NULL;
+    }
+
+    /* 預入期間 値なし許可 */
+    if ( pData->azukeire_term[0] != 0x00 && pData->azukeire_term[0] != 0x20 ) {
+        memcpy( h_Azukeire_Term, pData->azukeire_term, sizeof(pData->azukeire_term) );
+        rtrim( h_Azukeire_Term );
+        hi_Azukeire_Term=ORA_NOT_NULL;
+    }
+
+    /* 適用利率 */
+    rc = checkData(pData->rate, sizeof(pData->rate),
+                   "適用利率", h_Rate, g_szDtlMsg);
+    if (rc != NORMAL){
+        return(ERROR);
+    }
+    else {
+        hi_Rate=ORA_NOT_NULL;
+    }
+
+    /* 商品ID 値なし許可 */
+    if ( pData->shohin_id[0] != 0x00 && pData->shohin_id[0] != 0x20 ) {
+        memcpy( h_ShohinID, pData->shohin_id, sizeof(pData->shohin_id) );
+        rtrim( h_ShohinID );
+        hi_ShohinID=ORA_NOT_NULL;
+    }
+
+    /* 委任ID 値なし許可 */
+    if ( pData->inin_id[0] != 0x00 && pData->inin_id[0] != 0x20 ) {
+        memcpy( h_IninID, pData->inin_id, sizeof(pData->inin_id) );
+        rtrim( h_IninID );
+        hi_IninID=ORA_NOT_NULL;
+    }
+
+    /* 満期予約サイン 値なし許可 */
+    if ( pData->yoyaku_sign[0] != 0x00 && pData->yoyaku_sign[0] != 0x20 ) {
+        memcpy( h_YoyakuSign, pData->yoyaku_sign, sizeof(pData->yoyaku_sign) );
+        rtrim( h_YoyakuSign );
+        hi_YoyakuSign=ORA_NOT_NULL;
+    }
+
+    /* 最近取引日 値なし許可 */
+    if ( pData->trade_date[0] != 0x00 && pData->trade_date[0] != 0x20 ) {
+        memcpy( h_TradeDate, pData->trade_date, sizeof(pData->trade_date) );
+        rtrim( h_TradeDate );
+        hi_TradeDate=ORA_NOT_NULL;
+    }
+
+    /* データ基準日 */
+    rc = checkData(pData->data_date, sizeof(pData->data_date),
+                   "データ基準日", h_DataDate, g_szDtlMsg);
+    if (rc != NORMAL){
+        return(ERROR);
+    }
+    else {
+        hi_DataDate=ORA_NOT_NULL;
+    }
+
+    return(NORMAL);
+
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   int checkData( char *pcheck_data, int data_size, char *pmsg,            */
+/*                  char *change_data )                                      */
+/*                                                                           */
+/* Description:                                                              */
+/*   各種チェック                                                            */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* char            *pchack_data  I   チェック対象データ                      */
+/* int             data_size     I   チェック対象データサイズ                */
+/* char            *pmsg         I   メッセージ文字列                        */
+/* char            *pchange_data O   チェック後データ                        */
+/* g_szDtlMsg       char*        I/O  事象詳細文字列                         */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   None                                                                    */
+/*                                                                           */
+/* Return Code:                                                              */
+/*        NORMAL: 正常                                                       */
+/*        ERROR : データ不正                                                 */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int checkData( char *pcheck_data, int data_size, char *pmsg,
+                      char *pchange_data, char *g_szDtlMsg )
+{
+
+    if( pcheck_data[0] == 0x00 || pcheck_data[0] == 0x20 ) {
+        sprintf( g_szDtlMsg,
+                 "[CIFNO=%s 科目=%s 口座=%s 口=%s 枝=%s] %s の設定がありません。",
+                 h_CIF, h_AccntID, h_KozaNo, h_KuchiNo, h_EdaNo, pmsg );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+    else {
+        memcpy( pchange_data, pcheck_data, data_size);
+        rtrim( pchange_data );
+    }
+
+    return(NORMAL);
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*          int insertTables( char *szDtlMsg )                               */
+/* Made by:                                                                  */
+/* Description : テーブルの登録                                              */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* g_szDtlMsg       char*        I/O  事象詳細文字列                         */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL       : 正常終了                                                */
+/*    ERROR        : 挿入エラー                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int insertTables( char *g_szDtlMsg )
+{
+
+    /* ----------------------------------- */
+    /* TF_個別明細固定性預金テーブルの登録 */
+    /* ----------------------------------- */
+	G_POSITION = __LINE__;
+    EXEC SQL INSERT INTO TF_個別明細固定性預金
+       (   店番,
+           CIFNO,
+           世帯番号,
+           個人企業番号,
+           科目ID,
+           口座番号,
+           口座口番号,
+           枝番号,
+           商品ID,
+           預入日,
+           税区分ID,
+           金額,
+           利率,
+           満期日,
+           口座残高,
+           取扱店部課,
+           口座開設年月日,
+           通証区分ID,
+           預入期間,
+           委任ID,
+           満期予約サイン,
+           最近取引日,
+           データ基準日
+        )  VALUES (
+           :h_BranchNo :hi_BranchNo,
+           :h_CIF :hi_CIF,
+           :h_SetaNo :hi_SetaNo,
+           :h_KojinNo :hi_KojinNo,
+           :h_AccntID :hi_AccntID,
+           :h_KozaNo :hi_KozaNo,
+           :h_KuchiNo :hi_KuchiNo,
+           :h_EdaNo :hi_EdaNo,
+           :h_ShohinID :hi_ShohinID,
+           :h_Azukeire_Date :hi_Azukeire_Date,
+           :h_ZeiID :hi_ZeiID,
+           TO_NUMBER(:h_Kingaku, '999999999999999'),
+           TO_NUMBER(:h_Rate, '9999D9999999'),
+           :h_MankiDate :hi_MankiDate,
+           TO_NUMBER(:h_Zandaka, '999999999999999'),
+           :h_SoshikiID :hi_SoshikiID,
+           :h_StartDay :hi_StartDay,
+           :h_TushoID :hi_TushoID,
+           :h_Azukeire_Term :hi_Azukeire_Term,
+           :h_IninID :hi_IninID,
+           :h_YoyakuSign :hi_YoyakuSign,
+           :h_TradeDate :hi_TradeDate,
+           :h_DataDate :hi_DataDate
+       );
+
+    /* エラーチェック */
+    if (sqlca.sqlcode != 0){
+        sprintf( g_szDtlMsg,
+                 "個別明細固定性預金の登録に失敗しました。(sqlca.sqlcode=%d)",
+                 sqlca.sqlcode );
+		send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+		send_err ( m$sql_statment, sqlca.sqlcode, "INSERT TF_個別明細固定性預金", NULL, NULL, G_STATION);
+        return ERROR;
+    }
+
+    return NORMAL;
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*          int updateTables( szDtlMsg )                                     */
+/* Made by:                                                                  */
+/* Description : テーブルの更新                                              */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* g_szDtlMsg       char*        I/O  事象詳細文字列                         */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL       : 正常終了                                                */
+/*    ERROR        : 更新エラー                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int updateTables( char *g_szDtlMsg )
+{
+
+
+    memset( sqlcmd, 0x00, sizeof(sqlcmd) );
+
+    /* TF_個別明細固定性預金テーブルの更新 */
+	/* %01 Change */
+	G_POSITION = __LINE__;
+    EXEC SQL UPDATE TF_個別明細固定性預金 
+		SET
+		   店番 = :h_BranchNo :hi_BranchNo ,
+           世帯番号 = :h_SetaNo :hi_SetaNo ,
+           個人企業番号 = :h_KojinNo :hi_KojinNo,
+           商品ID = :h_ShohinID :hi_ShohinID ,
+           預入日 = :h_Azukeire_Date :hi_Azukeire_Date ,
+           税区分ID = :h_ZeiID :hi_ZeiID ,
+           金額 = TO_NUMBER(:h_Kingaku, '999999999999999') ,
+           利率 = TO_NUMBER(:h_Rate, '9999D9999999') ,
+           満期日 = :h_MankiDate :hi_MankiDate ,
+           口座残高 = TO_NUMBER(:h_Zandaka, '999999999999999') ,
+           取扱店部課 = :h_SoshikiID :hi_SoshikiID ,
+           口座開設年月日 = :h_StartDay :hi_StartDay ,
+           通証区分ID =:h_TushoID :hi_TushoID ,
+           預入期間 = :h_Azukeire_Term :hi_Azukeire_Term ,
+           委任ID = :h_IninID :hi_IninID ,
+           満期予約サイン = :h_YoyakuSign :hi_YoyakuSign ,
+           最近取引日 = :h_TradeDate :hi_TradeDate ,
+		   データ基準日 = :h_DataDate :hi_DataDate
+		WHERE
+			CIFNO  = :h_CIF
+		AND 科目ID = :h_AccntID
+		AND 口座番号 = :h_KozaNo
+		AND 口座口番号 = :h_KuchiNo
+		AND 枝番号 = :h_EdaNo
+		;
+			
+	if( sqlca.sqlcode != 0 ) {
+        sprintf( g_szDtlMsg, "TF_個別明細固定性預金更新エラー(sqlca.sqlcode=%d)", sqlca.sqlcode );
+		send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+		send_err ( m$sql_statment, sqlca.sqlcode, "UPDATE TF_個別明細固定性預金", NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+
+
+#if 0
+    strcpy( sqlcmd, "UPDATE TF_個別明細固定性預金 SET ");
+    setUpdateText( 1, sqlcmd, hi_BranchNo, "店番", h_BranchNo); 
+    setUpdateText( 1, sqlcmd, hi_SetaNo, "世帯番号", h_SetaNo);
+    setUpdateText( 1, sqlcmd, hi_KojinNo, "個人企業番号", h_KojinNo);
+    setUpdateText( 1, sqlcmd, hi_ShohinID, "商品ID", h_ShohinID);
+    setUpdateText( 1, sqlcmd, hi_Azukeire_Date, "預入日", h_Azukeire_Date);
+    setUpdateText( 1, sqlcmd, hi_ZeiID, "税区分ID", h_ZeiID);
+    setUpdateText( 2, sqlcmd, hi_Kingaku, "金額", h_Kingaku);
+    setUpdateText( 3, sqlcmd, hi_Rate, "利率", h_Rate);
+    setUpdateText( 1, sqlcmd, hi_MankiDate, "満期日", h_MankiDate);
+    setUpdateText( 2, sqlcmd, hi_Zandaka, "口座残高", h_Zandaka);
+    setUpdateText( 1, sqlcmd, hi_SoshikiID, "取扱店部課", h_SoshikiID);
+    setUpdateText( 1, sqlcmd, hi_SoshikiID, "口座開設年月日", h_StartDay);
+    setUpdateText( 1, sqlcmd, hi_TushoID, "通証区分ID", h_TushoID);
+    setUpdateText( 1, sqlcmd, hi_Azukeire_Term, "預入期間", h_Azukeire_Term);
+    setUpdateText( 1, sqlcmd, hi_IninID, "委任ID", h_IninID);
+    setUpdateText( 1, sqlcmd, hi_YoyakuSign, "満期予約サイン", h_YoyakuSign);
+    setUpdateText( 1, sqlcmd, hi_TradeDate, "最近取引日", h_TradeDate);
+
+    if (hi_DataDate == ORA_NOT_NULL){
+        strcat( sqlcmd, "データ基準日='" );
+        strcat( sqlcmd, h_DataDate );
+        strcat( sqlcmd, "' " );
+    }
+    
+    strcat( sqlcmd, "WHERE CIFNO='");
+    strcat( sqlcmd, h_CIF );
+    strcat( sqlcmd, "' " );
+    strcat( sqlcmd, "AND 科目ID='" );
+    strcat( sqlcmd, h_AccntID );
+    strcat( sqlcmd, "' " );
+    strcat( sqlcmd, "AND 口座番号='" );
+    strcat( sqlcmd, h_KozaNo );
+    strcat( sqlcmd, "' " );
+    strcat( sqlcmd, "AND 口座口番号='" );
+    strcat( sqlcmd, h_KuchiNo );
+    strcat( sqlcmd, "' " );
+    strcat( sqlcmd, "AND 枝番号='" );
+    strcat( sqlcmd, h_EdaNo );
+    strcat( sqlcmd, "'" );
+
+
+	G_POSITION = __LINE__;
+    EXEC SQL EXECUTE IMMEDIATE :sqlcmd ;
+    if( sqlca.sqlcode != 0 ) {
+        sprintf( g_szDtlMsg, "TF_個別明細固定性預金更新エラー(sqlca.sqlcode=%d)", sqlca.sqlcode );
+		send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+		send_err ( m$sql_statment, sqlca.sqlcode, "UPDATE TF_個別明細固定性預金", NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+
+#endif
+
+    return NORMAL;
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*          int setUpdateText( char *psqlcmd, short idata, char *pitem,      */
+/*                             char *pdata )                                 */
+/* Made by:                                                                  */
+/* Description : UPDATE文の作成                                              */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* type            int           I    処理区分                               */
+/* psqlcmd         char*        I/O   SQL文                                  */
+/* idata           short         I    標識変数                               */
+/* pitem           char*         I    カラム名                               */
+/* pdata           char*         I    更新データ                             */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static void setUpdateText( int type, char *psqlcmd, short idata, char *pitem, char *pdata )
+{
+
+    /* 受信値なしはNULLで更新 */
+    if (idata == ORA_NULL){
+        strcat( psqlcmd, pitem );
+        strcat( psqlcmd, "= " );
+        strcat( psqlcmd, "NULL " );
+        strcat( psqlcmd, ", " );
+        return;
+    }
+
+    /* 文字列 */
+    if (type == 1){
+        if (idata == 0){
+            strcat( psqlcmd, pitem );
+            strcat( psqlcmd, "='" );
+            strcat( psqlcmd, pdata );
+            strcat( psqlcmd, "', " );
+        }
+    }
+    /* DECIMAL 17,2 */
+    else if (type == 2){
+        if (idata == 0){
+            strcat( psqlcmd, pitem );
+            strcat( psqlcmd, "=TO_NUMBER('" );
+            strcat( psqlcmd, pdata );
+            strcat( psqlcmd, "', '999999999999999'), ");
+        }
+    }
+    /* DECIMAL 11,7 */
+    else if (type == 3){
+        if (idata == 0){
+            strcat( psqlcmd, pitem );
+            strcat( psqlcmd, "=TO_NUMBER('" );
+            strcat( psqlcmd, pdata );
+            strcat( psqlcmd, "', '9999D9999999'), ");
+        }
+    }
+
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*          int deleteTables( szDtlMsg )                                     */
+/* Made by:                                                                  */
+/* Description : テーブルの削除                                              */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* g_szDtlMsg       char*        I/O  事象詳細文字列                         */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL       : 正常終了                                                */
+/*    ERROR        : 削除エラー                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int deleteTables( char *g_szDtlMsg )
+{
+
+
+
+    /* TF_個別明細固定性預金テーブルの削除 */
+    EXEC SQL DELETE FROM TF_個別明細固定性預金
+        WHERE 
+            CIFNO = :h_CIF
+         AND 科目ID = :h_AccntID
+         AND 口座番号 = :h_KozaNo
+         AND 口座口番号 = :h_KuchiNo
+         AND 枝番号 = :h_EdaNo;
+    if (sqlca.sqlcode != 0){
+        sprintf( g_szDtlMsg, 
+                 "TF_個別明細固定性預金の削除に失敗しました。(sqlca.sqlcode=%d)",
+                 sqlca.sqlcode );
+		send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+		send_err ( m$sql_statment, sqlca.sqlcode, "DELETE FROM TF_個別明細固定性預金", NULL, NULL, G_STATION);
+        return ERROR;
+    }
+
+    return NORMAL;
+}
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*     putAcctLogFile(int tp, RECV_FILE_DATA *pData, COUNT *dCount, int rc,  */
+/*                                                          char *szDtlMsg ) */
+/* Made by:                                                                  */
+/* Description : ログファイル出力                                            */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* tp                int         I    ログタイプ識別                         */
+/* RECV_FILE_DATA    *pData      I    更新対象レコード情報を格納している     */
+/* COUNT             *dCount     I    処理件数を格納している                 */
+/* rc                int         I    処理結果を格納している                 */
+/* g_szDtlMsg       char*        I/O  事象詳細文字列                         */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL: 正常                                                           */
+/*    ERROR : エラー                                                         */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int putAcctLogFile(int tp, RECV_FILE_DATA *pData, COUNT *dCount, int rc,
+                          char *g_szDtlMsg )
+{
+    AP_D_BTLOG log;
+    char    szTime[EMB_C_DTIME_LEN + 1];
+    time_t  t = time( NULL );
+
+    /* バッファ初期化 */
+    memset( &log, ' ', sizeof(log));
+    log.szDelimit[0] = 0x0A;
+    log.szDelimit1[0] = 0X0A;
+
+    if (tp == L_WRITE_END){
+        sprintf( log.szNote, 
+                 "[ RECORD COUNT:%d <OK>:%d (INS:%d UPD:%d DEL:%d ) <NG>:%d ]",
+                 dCount->iRecNum,                    /* 処理件数             */
+                 dCount->iOkNum,                     /* 正常終了             */
+                 dCount->iInsNum,                    /* 正常終了（新規登録） */
+                 dCount->iUpdNum,                    /* 正常終了（更新）     */
+                 dCount->iDelNum,                    /* 正常終了（削除）     */
+                 dCount->iNgNum );					 /* ERROR終了            */
+
+        /* 処理結果ファイルへの書き込み */
+        if ( fwrite( &log, sizeof(AP_D_BTLOG) - sizeof(log.szNote1) - sizeof(log.szDelimit1),
+                     1, g_pfLogFile ) != 1 ) {
+            send_err ( m$file_write, errno, g_szLogFile, log , NULL, G_STATION);
+            return ERROR;
+        }
+
+		sprintf ( g_szDtlMsg,
+				"[ RECORD COUNT:%d <OK>:%d (INS:%d UPD:%d DEL:%d ) <NG>:%d ]",
+                 dCount->iRecNum,                    /* 処理件数             */
+                 dCount->iOkNum,                     /* 正常終了             */
+                 dCount->iInsNum,                    /* 正常終了（新規登録） */
+                 dCount->iUpdNum,                    /* 正常終了（更新）     */
+                 dCount->iDelNum,                    /* 正常終了（削除）     */
+                 dCount->iNgNum );					 /* ERROR終了            */
+
+		send_err (  m$message1, NORMAL, g_szDtlMsg, NULL , NULL, G_STATION);
+
+    }else{
+        /* 現状NORMAL正常時は処理しない。（以下に処理だけは残しておく）*/
+        if ( rc == NORMAL ) return NORMAL;
+
+        /* リターンコード編集 */
+        switch( rc ) {
+            case NORMAL:
+                memcpy( log.szRtInfo, "NORMAL",       6); /* 正常終了                  */
+                break;
+            case ERROR:
+                memcpy( log.szRtInfo, "ERROR",        5); /* エラー                    */
+                break;
+            default:
+                memcpy( log.szRtInfo, "NONE",         4); /* その他                    */
+                break;
+        }
+
+        if (rc != NORMAL){
+            memcpy( log.szRtType, " NG ", 4); /* エラー表示    */
+        }
+        else{
+            memcpy( log.szRtType, " OK ", 4); /* 正常終了表示  */
+        }
+        /* 日時 */
+        strftime( szTime, EMB_C_DTIME_LEN + 1, "%Y-%m-%d %H:%M:%S", localtime( &t ));
+        memcpy( log.szDateTime,szTime, EMB_C_DTIME_LEN );
+
+        /* 備考(個別明細定期性預金差分ファイルの処理データ表示） */
+        sprintf( log.szNote, "[ DATA ]%.*s,%.*s,%.*s,%.*s,%.*s,%.*s,%.*s",
+             sizeof(pData->record_id), pData->record_id,
+             sizeof(pData->cifno), pData->cifno,
+             sizeof(pData->accnt_id), pData->accnt_id,
+             sizeof(pData->koza_no), pData->koza_no,
+             sizeof(pData->kuchi_no), pData->kuchi_no,
+             sizeof(pData->eda_no), pData->eda_no,
+             sizeof(pData->data_date), pData->data_date
+        );
+
+        /* 事象発生詳細レコード番号、事象詳細文字列 */
+        sprintf( log.szNote1, "(%d) %.*s", dCount->iRecNum,
+                                           (unsigned int)strlen(g_szDtlMsg), g_szDtlMsg );
+
+        /* 処理結果ログファイルへの書き込み */
+        if ( fwrite( &log, sizeof(AP_D_BTLOG), 1, g_pfLogFile ) != 1 ){
+            send_err ( m$file_write, errno, g_szLogFile, log , NULL, G_STATION);
+            return ERROR;
+        }
+    }
+
+    return NORMAL;
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*     commit( void )                                                        */
+/* Made by:                                                                  */
+/* Description:ＤＢのコミット                                                */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/*  g_szDtlMsg      *char         O    事象詳細文字列                        */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL : 正常                                                          */
+/*    ERROR  : コミットエラー（システムエラー）                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int commit( VOID )
+{
+
+    /* ＤＢのコミット */
+    EXEC SQL COMMIT;
+    if (sqlca.sqlcode < 0) {
+        sprintf(g_szDtlMsg,
+                "ＤＢのコミットに失敗しました。(CODE=%ld)",
+                sqlca.sqlcode);
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+
+
+    return NORMAL;
+}
+
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*     rollback( void )                                                      */
+/* Made by:                                                                  */
+/* Description:ＤＢのロールバック                                            */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL : 正常                                                          */
+/*    ERROR  : ロールバックエラー（システムエラー）                          */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int rollback( )
+{
+    
+	/* ＤＢのロールバック */
+    EXEC SQL ROLLBACK WORK;
+    if (sqlca.sqlcode < 0) {
+        sprintf(g_szDtlMsg,
+                "ＤＢのロールバックに失敗しました。(CODE=%ld)",
+                sqlca.sqlcode);
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+
+    return NORMAL;
+}
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*     finalize( int rc, int iRecNum, int iOkNum )                           */
+/* Made by:                                                                  */
+/* Description:終了処理                                                      */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* rc              int           i   リターンコード                          */
+/* iRecNum         int           i   入力件数                                */
+/* iOkNum          int           i   成功件数                                */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static void finalize( int rc, int iRecNum, int iOkNum )
+{
+
+
+    /* ファイルのクローズ */
+	if ( file_open_flag1 == 1 ) {
+		fclose( g_pfRecvFile );
+	}
+	if ( file_open_flag2 == 1 ) {
+	    fclose( g_pfLogFile );
+	}
+
+    /* ＤＢ接続解除 */
+    
+	/*EXEC SQL CONNECT RESET;
+    if ( sqlca.sqlcode != 0 ){
+        send_err( LOG_C_TYPERR, 
+            "ＤＢ接続の解除が失敗しました。(sqlca.sqlcode=%d)", sqlca.sqlcode );
+    }
+
+
+    send_err( LOG_C_TYPINF,
+                       "プロセス(meisai_teiki_u)を終了します。(終了コード=%d 処理件数=%d/%d)",
+                       rc, iOkNum, iRecNum );
+	*/
+
+    exit( rc );
+}
+
+
+
+void dump(i_buf,size,name)
+char *i_buf;
+int size;
+char *name;
+{
+    char o_buf[1024];
+
+    memset(o_buf,0x00,sizeof(o_buf));
+    memcpy(o_buf,i_buf,size);
+
+    printf("%s=[%s]\n",name,o_buf);
+
+}

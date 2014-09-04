@@ -1,0 +1,232 @@
+/*==========================================================================*/
+/* COPYRIGHT Brainyworks,LTD.                                               */
+/* LICENSED MATERIAL - PROGRAM PROPERTY OF Brainyworks                      */
+/*==========================================================================*/
+/*                                                                          */
+/* SYSTEM           : e-MARKETBRAIN PREMIUM                                 */
+/*                                                                          */
+/* PROGRAM NAME     : ビューチェック                                        */
+/*                                                                          */
+/* MODULE NAME      : CheckView                                             */
+/*                                                                          */
+/* FUNCTION         : 指定されたビューが示すテーブルをチェックする。        */
+/*                                                                          */
+/* CALLING MODULE   : Main Module.                                          */
+/*                                                                          */
+/* CALLED MODULE    : send_err, errhandler, db_connect                      */
+/*                                                                          */
+/* ENTRY POINT      : Main Module.                                          */
+/*                                                                          */
+/* INPUT            : argv[1]・・・ビュー名                                 */
+/*                  : argv[2]・・・元テーブル名(サフィックス無し）          */
+/*                    ※argv[2]は省略可能                                   */
+/*                                                                          */
+/* EXIT             : 正常終了                                              */
+/*                    参照元テーブルがＡ系の場合 ・・・1                    */
+/*                    参照元テーブルがＢ系の場合 ・・・2                    */
+/*                    異常終了                   ・・・ERROR (9)            */
+/*                                                                          */
+/* Mod   yy/mm/dd   Coder           Comment                                 */
+/*-----+----------+-------------+-------------------------------------------*/
+/* %00 | 08/01/28 | Y.Takei     | First Eddition. 	                        */
+/* %01 | 10/05/10 | K.Miyahara  | SQLを簡略化＆結合ビューも処理可能に		*/
+/* %02 | 14/03/24 | ISID        | 全銀対応(ビュー名とテーブル名が違う場合)	*/
+/*==========================================================================*/
+
+/****************************************************************************/
+/*                                                                          */
+/*                            DECLARE DIVISION                              */
+/*                                                                          */
+/****************************************************************************/
+/*--------------------------------------------------------------------------*/
+/*  #1                       INCLUDE STATEMENTS                             */
+/*--------------------------------------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "msg.h"
+#include "common.h"
+#include "batchcommon.h"
+
+EXEC SQL INCLUDE mbproc.h;
+/*--------------------------------------------------------------------------*/
+/*  #2                       DEFINE STATEMENTS                              */
+/*--------------------------------------------------------------------------*/
+
+/*--------------------------------------------------------------------------*/
+/*  #3                       EXTERNAL DECLARES                              */
+/*--------------------------------------------------------------------------*/
+
+/*--------------------------------------------------------------------------*/
+/*  #4                      STRUCT DECLARATIONS                             */
+/*--------------------------------------------------------------------------*/
+
+/*--------------------------------------------------------------------------*/
+/*  #5                       SUBROUTNE DEFINITION                           */
+/*--------------------------------------------------------------------------*/
+extern int send_err();
+extern void errhandler();
+extern int db_connect();
+
+/****************************************************************************/
+/*                                                                          */
+/*                            PROCEDURE DIVISION                            */
+/*                                                                          */
+/****************************************************************************/
+main( argc, argv )
+    int     argc;
+    char    *argv[];
+{
+/*--------------------------------------------------------------------------*/
+/*  #6                    LOCAL VARIABLE DECLARATIONS                       */
+/*--------------------------------------------------------------------------*/
+    int     exit_code=NORMAL;
+    char    process_name[43];
+    int     return_code;
+    char    table_name_a[33];
+    char    table_name_b[33];
+    int     view_suffix=0;
+
+EXEC SQL BEGIN DECLARE SECTION;
+    varchar table_name[31];
+    varchar view_name[31];
+	varchar org_tbname[31];  /* %02 Add 元テーブル名 */
+EXEC SQL END DECLARE SECTION;
+
+/*--------------------------------------------------------------------------*/
+/*                              MAIN ROUTINE                                */
+/*--------------------------------------------------------------------------*/
+
+/*==========================================================================*/
+/*      INITIALIZATION                                                      */
+/*==========================================================================*/
+
+    /*-----------------------------*/
+    /* Print process start message */
+    /*-----------------------------*/
+    strcpy( G_STATION, "CheckView" );
+    memset(process_name,0x00,sizeof(process_name));
+    strcpy(process_name,"ビューチェック");
+
+    send_err( m$start_process, NORMAL, process_name, "", "", G_STATION );
+
+    /*--------------*/
+    /* Set Argument */
+    /*--------------*/
+	/* %02 Change Start */
+	memset ( org_tbname.arr, 0x00, sizeof( org_tbname.arr ) );
+
+
+	/* ビュー名のみ指定 */
+    if ( argc == 2 ) {
+		strncpy ( org_tbname.arr, argv[1], sizeof( org_tbname.arr ));
+		org_tbname.len = (unsigned short) strlen ( org_tbname.arr );
+    }
+	/* ビュー名とテーブル名指定 */
+	else if ( argc == 3 ) {
+		strncpy ( org_tbname.arr, argv[2], sizeof( org_tbname.arr ));
+		org_tbname.len = (unsigned short) strlen ( org_tbname.arr );
+    }
+	else  {
+        send_err( m$unmatch_parameter_count, NORMAL, "", "", "", G_STATION );
+        exit_code = ERROR;
+        goto ENDPROC ;
+    }
+	/* %02 Change End */
+    
+	memset(view_name.arr, 0x00, sizeof(view_name.arr));
+    strncpy(view_name.arr, argv[1], sizeof(view_name.arr) - 1);
+    view_name.len=(unsigned short)strlen(view_name.arr);
+
+
+    /*-------------------------------------------------------*/
+    /* Setup error handler routine & Logged in ORACLE server */
+    /*-------------------------------------------------------*/
+    EXEC SQL WHENEVER SQLERROR DO errhandler();
+
+    G_POSITION = __LINE__;
+    return_code = db_connect() ;
+    if( return_code != NORMAL ){
+        send_err( m$db_connect, return_code, "", "", "", G_STATION );
+        exit_code = ERROR;
+        goto ENDPROC ;
+    }
+
+/*==========================================================================*/
+/*      PROCEDURE                                                           */
+/*==========================================================================*/
+
+    /*------------------------------------------------*/
+    /* ビュー名からビュー先のテーブル名を取得する */
+    /*      USER_VIEWS                             */
+    /*------------------------------------------------*/
+    memset(table_name.arr, 0x00, sizeof(table_name.arr));
+    G_POSITION = __LINE__;
+    EXEC SQL
+		SELECT
+			REFERENCED_NAME
+		INTO 
+			:table_name
+		FROM 
+			USER_DEPENDENCIES
+		WHERE 
+			NAME = :view_name AND
+			SUBSTRB(REFERENCED_NAME,1,LENGTHB(REFERENCED_NAME)-1) = : org_tbname  /* %02 Change table_name-> org_tbname */
+		;
+    if (sqlca.sqlcode < 0) {
+        exit_code = ERROR;
+        goto ENDPROC;
+    }
+
+    if (sqlca.sqlcode == ORA_NOF) {
+        send_err( m$view_not_found, NORMAL, view_name.arr, "", "", G_STATION );
+        exit_code = ERROR;
+        goto ENDPROC;
+    }
+
+    memset(table_name_a,0x00,sizeof(table_name_a));
+    strcpy(table_name_a,org_tbname.arr); /* %02 Change */
+    strcat(table_name_a,TABLE_SUFFIX_A);
+
+    memset(table_name_b,0x00,sizeof(table_name_b));
+    strcpy(table_name_b,org_tbname.arr); /* %02 Change */
+    strcat(table_name_b,TABLE_SUFFIX_B);
+
+    /* テーブル名で処理を分岐 */
+    if ( ! strcmp(table_name.arr,table_name_a) ) {
+        view_suffix = VIEW_A;
+    } else if ( ! strcmp(table_name.arr,table_name_b) ) {
+        view_suffix = VIEW_B;
+    } else {
+        send_err( m$invalid_view, NORMAL, table_name.arr, "", "", G_STATION );
+        exit_code = ERROR;
+        goto ENDPROC;
+    }
+
+
+/*==========================================================================*/
+/*      TERMINATION                                                         */
+/*==========================================================================*/
+
+    /*--------------------------*/
+    /* Logged out ORACLE server */
+    /*--------------------------*/
+    G_POSITION = __LINE__;
+    if ( exit_code == NORMAL ) {
+        EXEC SQL COMMIT WORK RELEASE;
+    } else {
+        EXEC SQL ROLLBACK WORK RELEASE;
+    }
+
+    /*---------------------------------*/
+    /* Print process terminate message */
+    /*---------------------------------*/
+ENDPROC:
+    if ( exit_code == NORMAL ) {
+        send_err( m$stop_process, NORMAL, process_name, "", "", G_STATION );
+        exit_code = view_suffix;
+    } else {
+        send_err( m$abend_process, NORMAL, process_name, "", "", G_STATION );
+    }
+    exit( exit_code );
+}

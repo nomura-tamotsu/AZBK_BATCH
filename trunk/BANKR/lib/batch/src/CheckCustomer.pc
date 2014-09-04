@@ -1,0 +1,390 @@
+/*==========================================================================*/
+/* Copyright　Information Services International-Dentsu, Ltd.   　          */
+/*==========================================================================*/
+/*                                                                          */
+/* SYSTEM           : BANK・R－CC                                           */
+/*                                                                          */
+/* PROGRAM NAME     : 整合性チェック－顧客属性                              */
+/*                                                                          */
+/* MODULE NAME      : CheckCustomer                                         */
+/*                                                                          */
+/* FUNCTION         : 顧客属性の整合性チェックを行う。                      */
+/*                    店番が営業店マスタに存在するかチェック。              */
+/*                                                                          */
+/* CALLING MODULE   : Main Module.                                          */
+/*                                                                          */
+/* CALLED MODULE    : send_err, errhandler, db_connect                      */
+/*                                                                          */
+/* ENTRY POint      : Main Module.                                          */
+/*                                                                          */
+/* INPUT            : None                                                  */
+/*                                                                          */
+/*                                                                          */
+/* EXIT             : 正常終了                 ・・・NORMAL(0)              */
+/*                    警告終了(不整合データ有) ・・・1                      */
+/*                    異常終了                 ・・・ERROR (9)              */
+/*                                                                          */
+/* Mod   yy/mm/dd   Coder           Comment                                 */
+/*-----+----------+-------------+-------------------------------------------*/
+/* %00 | 09/07/01 | K.Miyahara  | First Edition.                            */
+/* %01 | 14/03/27 | N.Ogawa     | あおぞら更改対応							*/
+/*==========================================================================*/
+/*---------------------------------------------------------------------------*/
+/* Standard include specification                                            */
+/*---------------------------------------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/*---------------------------------------------------------------------------*/
+/* User defined include specification                                        */
+/*---------------------------------------------------------------------------*/
+#include "msg.h"
+#include "batchcommon.h"
+#include "common.h"
+
+EXEC SQL INCLUDE mbproc.h;
+
+/*--------------------------------------------------------------------------*/
+/*                           DEFINE STATEMENTS                              */
+/*--------------------------------------------------------------------------*/
+
+/*--------------------------------------------------------------------------*/
+/*                           EXTERNAL DECLARES                              */
+/*--------------------------------------------------------------------------*/
+EXEC SQL BEGIN DECLARE SECTION;
+    int     total_count;
+    int     error_count;
+    short   h_address_cd;
+    varchar branch_id[6];
+    varchar address_cd[12];
+EXEC SQL END DECLARE SECTION;
+
+char    process_name[43];
+char    g_work[1024];
+
+/*--------------------------------------------------------------------------*/
+/*                          STRUCT DECLARATIONS                             */
+/*--------------------------------------------------------------------------*/
+
+/*--------------------------------------------------------------------------*/
+/*                           SUBROUTNE DEFINITION                           */
+/*--------------------------------------------------------------------------*/
+extern int send_err();
+extern int db_connect();
+extern void errhandler();
+
+/****************************************************************************/
+/*                                                                          */
+/*                            PROCEDURE DIVISION                            */
+/*                                                                          */
+/****************************************************************************/
+
+/*--------------------------------------------------------------------------*/
+/*                              MAIN ROUTINE                                */
+/*--------------------------------------------------------------------------*/
+main()
+{
+/*--------------------------------------------------------------------------*/
+/*                        LOCAL VARIABLE DECLARATIONS                       */
+/*--------------------------------------------------------------------------*/
+    int     rc;
+    int     exitcode;
+    int     notexist;
+    int     cursor1;
+    int     propriety;
+    char    work1[512];
+    FILE*   log_fp;                 /* ログファイルポインタ */
+    char    *logdir;                /* %04 add */
+    char    logfile[256];           /* %04 add */
+
+
+/*==========================================================================*/
+/*      INITIALIZATION                                                      */
+/*==========================================================================*/
+
+	/*-----------------------------*/
+	/* Initialize environment      */
+	/*-----------------------------*/
+    exitcode = NORMAL;
+    notexist = 0 ;
+    cursor1 = 0 ;
+    propriety = 0 ;
+
+	/*-----------------------------*/
+	/* Print process start message */
+	/*-----------------------------*/
+    strcpy( G_STATION, "CheckCustomer" );
+	
+	memset(process_name,0x00,sizeof(process_name));
+    strcpy(process_name,"整合性チェック－顧客属性");
+
+    send_err( m$start_process, NORMAL, process_name, "", "", G_STATION );
+
+
+	/*-----------------------------*/
+	/* Get environment variable    */
+	/*-----------------------------*/
+    if( ( logdir = (char *)getenv( "LOG_DIR" ) ) == NULL ){
+        send_err( m$getenv, -1, "LOG_DIR", NULL, NULL, G_STATION );
+        exitcode = ERROR;
+        goto ENDPROC ;
+    }
+
+	/* 不整合データ出力用ログファイル名セット */
+    sprintf (logfile, "%s%c%s%clog", logdir, 0x5c, G_STATION, 0x2E);
+
+    /*-----------------------------*/
+    /* Setup error handler routine */
+    /*-----------------------------*/
+    EXEC SQL WHENEVER SQLERROR DO errhandler();
+
+	/*-----------------------------*/
+	/* Connect to database         */
+	/*-----------------------------*/
+    G_POSITION = __LINE__;
+    rc = db_connect() ;
+    if( rc != 0 ){
+        send_err( m$db_connect, rc, NULL, NULL, NULL, G_STATION );
+        exitcode = ERROR;
+        goto ENDPROC ;
+    }
+
+    /*======================================================================*/
+    /*                      メ　イ　ン　処　理                              */
+    /*======================================================================*/
+    /*---------------------*/
+    /* Get total row count */
+    /*---------------------*/
+	total_count = 0;
+    G_POSITION = __LINE__;
+    EXEC SQL 
+		SELECT 
+			count(*) 
+		INTO 
+			:total_count
+		FROM 
+			TF_顧客属性
+		;
+    if( sqlca.sqlcode < 0 ){
+
+		sprintf( g_work,
+				"顧客属性件数取得エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+		send_err ( m$emb_error, -1, g_work, NULL, NULL, G_STATION);
+		send_err ( m$sql_statment, sqlca.sqlcode, "SELECT COUNT(*) FROM TF_顧客属性", NULL, NULL, G_STATION);
+        exitcode = ERROR;
+        goto ENDPROC ;
+    }
+    if( total_count == 0 ) {
+        send_err( m$MBB1001W, 0, "TF_顧客属性", NULL, NULL, G_STATION ) ;
+        goto ENDPROC ;
+    }
+
+    error_count = 0;
+    /*-----------------*/
+    /* Check Branch-ID */
+    /*-----------------*/
+    G_POSITION = __LINE__;
+    EXEC SQL DECLARE attribute_row1 CURSOR FOR
+		SELECT 
+			DISTINCT 店番
+		FROM 
+			TF_顧客属性
+		WHERE 
+			店番 NOT IN (SELECT 店番 FROM TM_営業店) 
+		;
+    if( sqlca.sqlcode < 0 ){
+        send_err(m$sql_statment,0,"DECLARE attribute_row1",NULL,NULL,G_STATION);
+        exitcode = ERROR;
+        goto ENDPROC ;
+    }
+
+    G_POSITION = __LINE__;
+    EXEC SQL OPEN attribute_row1 ;
+    if( sqlca.sqlcode < 0 ){
+        send_err(m$sql_statment,0,"OPEN attribute_row1",NULL,NULL,G_STATION);
+        exitcode = ERROR;
+        goto ENDPROC ;
+    }
+    cursor1 = 1;
+
+    while(1) {
+        G_POSITION = __LINE__;
+        EXEC SQL FETCH attribute_row1 INTO :branch_id;
+#ifdef DEBUG
+        printf("[%s] FETCH code=%d\n",G_STATION,sqlca.sqlcode);
+#endif
+        if( sqlca.sqlcode < 0 ){
+            send_err(m$sql_statment,0,"FETCH attribute_row1",NULL,NULL,G_STATION);
+            exitcode = ERROR;
+            goto ENDPROC ;
+        }
+        if( sqlca.sqlcode == ORA_NOF ){
+            goto CLOSE1;
+        }
+        branch_id.arr[branch_id.len] = '\0';
+#ifdef DEBUG
+        printf("[%s] FETCH branch_id=%s\n",G_STATION,branch_id.arr);
+#endif
+
+        memset(work1, 0x00, sizeof(work1));
+        sprintf(work1, "顧客属性データの店番 (%s) が営業店マスタに登録されていません.\n", branch_id.arr);
+
+        if(error_count == 0){
+            log_fp = fopen(logfile, "w" );
+        }
+        else{
+            log_fp = fopen(logfile, "a" );
+        }
+
+		if ( log_fp == NULL ) {
+			sprintf ( g_work, "ログファイル%sのオープンに失敗しました。", logfile );
+			send_err( m$file_open, errno, g_work, NULL, NULL, G_STATION );
+			exitcode = ERROR;
+            goto ENDPROC ;
+		}
+		
+		rc = fputs(work1,log_fp);
+		if ( rc == EOF ) {
+			send_err ( m$file_write, errno, logfile, work1 , NULL, G_STATION);
+			if ( log_fp != NULL ) {
+				fclose( log_fp );
+			}
+			exitcode = ERROR;
+            goto ENDPROC ;
+		}
+		
+		fclose( log_fp );
+
+        error_count++;
+    }
+    
+CLOSE1:
+    if ( cursor1 == 1 ){
+        EXEC SQL CLOSE attribute_row1;
+    }
+    if( exitcode == ERROR){
+        goto ENDPROC ;
+    }
+    cursor1 = 0 ;
+    
+    /* ログ出力件数出力 */
+    if(error_count != 0){
+        memset(work1, 0x00, sizeof(work1));
+        sprintf(work1, "%d",error_count);
+        send_err(m$MBB1000W, 0, work1, NULL, NULL, G_STATION);
+        exitcode = 1;
+    }
+
+#if 0
+    cursor1 = 0 ;
+    error_count3 = 0;
+    /*-----------------*/
+    /* Check Address   */
+    /*-----------------*/
+	/* %01 住所コードチェックは不要とする。 */
+    G_POSITION = __LINE__;
+    EXEC SQL DECLARE attribute_row3 CURSOR FOR
+		SELECT 
+			DISTINCT 住所コード
+		FROM 
+			TF_顧客属性
+		WHERE 
+			住所コード NOT IN (SELECT 住所コード FROM TF_住所) 
+		;
+    if( sqlca.sqlcode < 0 ){
+        EXEC SQL ROLLBACK WORK RELEASE;
+        send_err(m$sql_statment,0,"DECLARE attribute_row3",NULL,NULL,G_STATION);
+        exitcode = ERROR;
+        goto ENDPROC ;
+    }
+
+    G_POSITION = __LINE__;
+    EXEC SQL OPEN attribute_row3 ;
+    if( sqlca.sqlcode < 0 ){
+        EXEC SQL ROLLBACK WORK RELEASE;
+        send_err(m$sql_statment,0,"OPEN attribute_row3",NULL,NULL,G_STATION);
+        exitcode = ERROR;
+        goto ENDPROC ;
+    }
+    cursor1 = 1;
+
+    while(1) {
+        G_POSITION = __LINE__;
+        EXEC SQL FETCH attribute_row3 INTO :address_cd :h_address_cd;
+#ifdef DEBUG
+        printf("[%s] FETCH code=%d\n",G_STATION,sqlca.sqlcode);
+#endif
+        if( sqlca.sqlcode < 0 ){
+            EXEC SQL ROLLBACK WORK RELEASE;
+            send_err(m$sql_statment,0,"FETCH attribute_row3",NULL,NULL,G_STATION);
+            exitcode = ERROR;
+            goto ENDPROC ;
+        }
+        if( sqlca.sqlcode == ORA_NOF ){
+            goto CLOSE3;
+        }
+        address_cd.arr[address_cd.len] = '\0';
+#ifdef DEBUG
+        printf("[%s] FETCH address_cd=%s\n",G_STATION,address_cd.arr);
+#endif
+        memset(work1, 0x00, sizeof(work1));
+        sprintf(work1, "顧客属性データの住所コード (%s) が住所データに存在しません.\n", address_cd.arr);
+        if(error_count == 0){
+            log_fp = fopen(logfile, "w" );
+            fputs(work1,log_fp);
+            fclose( log_fp );
+        }
+        else{
+            log_fp = fopen(logfile, "a" );
+            fputs(work1,log_fp);
+            fclose( log_fp );
+        }
+		
+        error_count++;              /* カーソル管理のため加算 */
+        error_count3++;
+    }
+    
+
+CLOSE3:
+    if ( cursor1 == 1 ){
+        EXEC SQL CLOSE attribute_row3;
+    }
+    if( exitcode == ERROR){
+        goto ENDPROC ;
+    }
+    cursor1 = 0 ;
+    
+    /* ログ出力件数出力 */
+    if(error_count3 != 0){
+        memset(work1, 0x00, sizeof(work1));
+        sprintf(work1, "%d",error_count3);
+        send_err(m$MBB1025W, 0, work1, NULL, NULL, G_STATION);
+        exitcode = 1;
+    }
+
+#endif
+
+/*==========================================================================*/
+/*      TERMINATION                                                         */
+/*==========================================================================*/
+    /*--------------------------*/
+    /* Logged out ORACLE server */
+    /*--------------------------*/
+
+
+    /*---------------------------------*/
+    /* Print process terminate message */
+    /*---------------------------------*/
+ENDPROC:
+    if(exitcode == ERROR){
+        send_err( m$abend_process, ERROR, process_name, "", "", G_STATION );
+        exit(ERROR);
+    }
+	else {
+		send_err( m$stop_process, NORMAL, process_name, "", "", G_STATION );
+	}
+
+    exit(exitcode);     
+
+}

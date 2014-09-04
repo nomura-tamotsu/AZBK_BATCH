@@ -1,0 +1,1055 @@
+/*==========================================================================*/
+/* Copyright　Information Services International-Dentsu, Ltd.   　          */
+/*==========================================================================*/
+/*                                                                          */
+/* SYSTEM           : BANK・R－CC                                           */
+/*                                                                          */
+/* PROGRAM NAME     : テレバン契約者属性抽出                                */
+/*                                                                          */
+/* MODULE NAME      : ContractorExport                                      */
+/*                                                                          */
+/* FUNCTION         : テレバン契約者属性抽出処理を行う                      */
+/*                                                                          */
+/*                                                                          */
+/* CALLING MODULE   : Main Module.                                          */
+/*                                                                          */
+/* CALLED MODULE    : send_err, errhandler, db_connect                      */
+/*                                                                          */
+/* ENTRY POint      : Main Module.                                          */
+/*                                                                          */
+/* INPUT            : argv[1]・・処理モード(1:通常 2:障害時)                */
+/*                  : argv[2]・・テレバン契約者属性ファイル(ﾌﾙﾊﾟｽ)          */
+/*                    argv[3]・・抽出開始日(モード2の時のみ指定)            */
+/*                    argv[4]・・抽出終了日(モード2の時のみ指定)            */
+/*                                                                          */
+/*                                                                          */
+/* EXIT             : 正常終了       ・・・NORMAL(0)                        */
+/*                    異常終了       ・・・ERROR (9)                        */
+/*                                                                          */
+/* Mod   yy/mm/dd   Coder           Comment                                 */
+/*-----+----------+-------------+-------------------------------------------*/
+/* %00 | 14/04/24 | ISID        | First Edition.                            */
+/* %01 | 14/07/04 | ISID        | 改行コード(0d0a 対応 )                    */
+/*==========================================================================*/
+/*---------------------------------------------------------------------------*/
+/* Standard include specification                                            */
+/*---------------------------------------------------------------------------*/
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <ctype.h>
+#include <errno.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <time.h>
+
+/*---------------------------------------------------------------------------*/
+/* User defined include specification                                        */
+/*---------------------------------------------------------------------------*/
+#include "msg.h"
+#include "common.h"
+#include "batchcommon.h"
+#include "apl_common.h"
+
+EXEC SQL INCLUDE mbproc.h;
+
+/*---------------------------------------------------------------------------*/
+/* Internal macro definition                                                 */
+/*---------------------------------------------------------------------------*/
+/* 処理区分 */
+#define ATTRIBUTE_S_NON                 1           /* 期間指定なし          */
+#define ATTRIBUTE_S_START               2           /* 開始日指定            */
+#define ATTRIBUTE_S_END                 3           /* 終了日指定            */
+
+typedef struct _COUNT {
+    int  iRecNum;                                    /* 処理件数             */
+    int  iOkNum ;                                    /* 正常終了             */
+    int  iInsNum;                                    /* 正常終了（新規登録） */
+    int  iUpdNum;                                    /* 正常終了（更新）     */
+    int  iDelNum;                                    /* 正常終了（削除）     */
+    int  iNgNum ;                                    /* ERROR終了            */
+} COUNT;
+/*---------------------------------------------------------------------------*/
+/* Global variable specification                                             */
+/*---------------------------------------------------------------------------*/
+/* 設定ファイル項目（ホスト変数以外）*/
+char g_szSendFile       [AP_CONFIG_LINE ];		 /* 送信ファイル             */
+
+char g_SendRec          [1024];                  /* 送信ファイル１レコード   */
+
+FILE *g_pfSendFile;
+
+char g_szDtlMsg           [AP_C_NOTE_LEN_H];         /* 事象詳細文字列       */
+
+char    process_name[43];
+char    g_work[1024];
+int		g_mode;										/* 処理モード 1:通常運用 2:障害時運用 */
+		
+char g_StartDate[9];								/* 開始日                */
+char g_EndDate[9];									/* 終了日                */
+
+int file_open_flag  = 0;							/* ファイルオープンフラグ */
+int cusor_open_flag = 0;							/* カーソルオープンフラグ */
+
+char g_szSystemDate[22];                              /* システム日付         */
+char g_szSystemDateBuf[22];                           /* システム日付         */
+
+
+
+/*---------------------------------------------------------------------------*/
+/* Host Variable                                                             */
+/*---------------------------------------------------------------------------*/
+EXEC SQL INCLUDE SQLCA;
+EXEC SQL BEGIN DECLARE SECTION;
+    /* ＤＢ接続情報 */
+    char sqlcmd[2048];
+
+/* 契約者（KEIYAKU_T） */
+    char  h_UserID[17];                              /* 契約者ID             */
+    short hi_UserID;
+    char  h_EigyoID[6];                              /* 営業店ID             */
+    short hi_EigyoID;
+    char  h_CIFNO[9];                                /* 顧客番号             */
+    short hi_CIFNO;
+    char  h_KaijoDate[11];                           /* 解除日               */
+    short hi_KaijoDate;
+
+
+	char h_FROM_TS               [ 27];         /* 対象抽出用タイムスタンプ  */
+	char h_TO_TS                 [ 27];         /* 対象抽出用タイムスタンプ  */
+	char h_process_id             [ 5];				/* 処理ID                */
+
+    long  h_COUNT;
+
+EXEC SQL END DECLARE SECTION;
+
+/*---------------------------------------------------------------------------*/
+/* External function prototype                                               */
+/*---------------------------------------------------------------------------*/
+
+/*---------------------------------------------------------------------------*/
+/* Internal function prototype                                               */
+/*---------------------------------------------------------------------------*/
+extern int send_err();
+extern void errhandler();
+extern int db_connect();
+void rtrim();
+
+static void initialize( int ac, char *av[] );
+static int  get_previous_date ( const char *process_id );
+static int  update_previous_date ( const char *process_id );
+static void makeExtractionMessage ( char *from , char *to );
+static void editDate ( int mode, char *src, char *dest );
+static int  cursorOpen( char *g_szDtlMsg );
+static int  readTables( char *g_szDtlMsg );
+static int  putSendData( char *g_szDtlMsg );
+static int  setToshinFlag( );
+static int  commit( );
+static int  rollback( void );
+static void finalize( int rc );
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   int main( int argc, char *argv[] )                                      */
+/*                                                                           */
+/* Made by:                                                                  */
+/* Description:                                                              */
+/*      メイン処理                                                           */
+/*                                                                           */
+/* Arguments:                                                                */
+/* Type     Name              I/O    Content                                 */
+/* -------- ----------------- --- ------------------------------------------ */
+/*    int    argc              I  引数の数                                   */
+/*    char  *argv[]   argv[1]  I  処理モード(1:通常 2:障害時)                */
+/*                    argv[2]  I  テレバン契約者属性ファイル(ﾌﾙﾊﾟｽ)          */
+/*                    argv[3]  I  抽出開始日(モード2の時のみ指定)            */
+/*                    argv[4]  I  抽出終了日(モード2の時のみ指定)            */
+/*                                                                           */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+int main( int argc, char *argv[] )
+{
+    int  rc;
+	COUNT    dCount;
+
+	/*-----------------------------*/
+    /* Print process start message */
+    /*-----------------------------*/
+
+    strcpy( G_STATION, "ContractorExport" );
+	
+	memset(process_name,0x00,sizeof(process_name));
+    strcpy(process_name,"テレバン契約者属性抽出");
+
+    send_err( m$start_process, NORMAL, process_name, "", "", G_STATION );
+
+	memset ( &dCount, 0x0, sizeof(dCount));
+
+    /*-------------------------------------------------------*/
+    /* Setup error handler routine                           */
+    /*-------------------------------------------------------*/
+    EXEC SQL WHENEVER SQLERROR DO errhandler();
+
+    G_POSITION = __LINE__;
+    rc = db_connect() ;
+    if ( rc != NORMAL ) {
+        send_err( m$db_connect, rc, "", "", "", G_STATION );
+        rc = ERROR;
+        goto ENDPROC ;
+    }
+
+    /* ---------- */
+    /* 初期化処理 */
+    /* ---------- */
+    initialize( argc, argv );
+
+
+
+    while( 1 ) {
+   
+		/* TFB_テレバン契約属性の読込 */
+		if(( rc = readTables( g_szDtlMsg )) != NORMAL ) {
+            break;
+		}
+		if( sqlca.sqlcode == ORA_NOF ) {
+            break;
+		}
+		/*printf("h_UserID=%s\n",h_UserID);*/
+
+		/* テレバン契約者属性ファイルへの書き込み */
+		if(( rc = putSendData( g_szDtlMsg )) != NORMAL ) {
+            break;
+		}
+
+        dCount.iRecNum++;
+
+
+
+    } /* while loop end */
+
+	if ( rc == NORMAL ){
+        dCount.iOkNum = dCount.iRecNum;
+    }
+	 
+	if( rc == NORMAL ) {
+		if ( dCount.iRecNum == 0 ){
+			sprintf ( g_szDtlMsg, "テレバン契約者属性ファイル(%s)は０件ファイルです。", g_szSendFile );
+		}
+		else {
+			sprintf ( g_szDtlMsg, "テレバン契約者属性ファイル(%s) %d 件のデータを抽出しました。", g_szSendFile ,dCount.iRecNum );
+		}
+		send_err (m$message1, NORMAL, g_szDtlMsg, NULL, NULL, G_STATION);
+    }
+	
+	/* 次回抽出条件更新 (通常時のみ更新)*/
+	if ( g_mode == USUALITY &&  rc == NORMAL ) {
+		rc = update_previous_date ( "CZU" );
+		if ( rc == NORMAL ) {
+			/* ＤＢのコミット */
+			rc = commit();
+		}
+		else{
+			rollback();
+		}
+	}
+
+
+ENDPROC:	
+	if ( rc == NORMAL ) {
+        send_err( m$stop_process, NORMAL, process_name, "", "", G_STATION );
+    } else {
+        send_err( m$abend_process, ERROR, process_name, "", "", G_STATION );
+    }
+
+	 finalize( rc );
+
+}
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   void initialize( int ac, char *av[] )                                   */
+/*                                                                           */
+/* Made by:                                                                  */
+/* Description:                                                              */
+/*      初期化処理                                                           */
+/*                                                                           */
+/* Arguments:                                                                */
+/* Type     Name              I/O    Content                                 */
+/* -------- ----------------- --- ------------------------------------------ */
+/*    int    argc              I  引数の数                                   */
+/*    char  *argv[]   argv[1]  I  処理モード(1:通常 2:障害時)                */
+/*                    argv[2]  I  テレバン契約者属性ファイル(ﾌﾙﾊﾟｽ)          */
+/*                    argv[3]  I  抽出開始日(モード2の時のみ指定)            */
+/*                    argv[4]  I  抽出終了日(モード2の時のみ指定)            */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*                                                                           */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static void initialize( int ac, char *av[] )
+{
+    time_t t = time( NULL );
+
+	int exit_code=NORMAL;
+	int rc;
+
+	
+
+    /* システム日付を取得する */
+	strftime( g_szSystemDate, sizeof( g_szSystemDate ), "%Y%m%d %H%M%S", localtime( &t ));
+    strcpy( g_szSystemDateBuf, g_szSystemDate );
+
+
+	/* 引数処理 */
+	if ( ac >= 2 ) {
+		if ( !strcmp ( av[1] , "1" )) { /* 通常 */
+			g_mode = USUALITY;
+		}
+		else if ( !strcmp ( av[1] , "2" )) { /* 障害時 */
+			g_mode = OBSTACLE;
+		}
+		else {
+			sprintf (g_szDtlMsg,"第1引数:処理モードは、1 または 2を指定して下さい(1:通常 2:障害時)");
+			send_err (m$invalid_parameter, ERROR, g_szDtlMsg, NULL, NULL, G_STATION);
+			exit_code = ERROR;
+			goto initialize_end;
+		}
+	}
+	else {
+		sprintf (g_szDtlMsg,"処理モード(1:通常 2:障害時) 抽出ファイル名 [抽出開始日 抽出終了日]");
+		send_err (m$invalid_parameter, ERROR, g_szDtlMsg, NULL, NULL, G_STATION);
+		exit_code = ERROR;
+		goto initialize_end;
+	}
+
+	switch ( g_mode ) {
+		case USUALITY: /* 通常 */
+			if ( ac == 3 ) {
+				strcpy ( g_szSendFile, av[2] );
+			}
+			else {
+				sprintf (g_szDtlMsg,"処理モード(1:通常) 抽出ファイル名");
+				send_err (m$invalid_parameter, ERROR, g_szDtlMsg, NULL, NULL, G_STATION);
+				exit_code = ERROR;
+				goto initialize_end;
+			}
+
+			break;
+
+		case OBSTACLE:/* 障害時 */
+			if ( ac == 5 ) {
+				strcpy ( g_szSendFile, av[2] );
+				if ( strlen(av[3]) > 8 || strlen(av[4]) > 8 ) {
+					sprintf (g_szDtlMsg,"抽出開始日 または 抽出終了日のレングスが長すぎます(YYYYMMDD)");
+					send_err (m$invalid_parameter, ERROR, g_szDtlMsg, NULL, NULL, G_STATION);
+					exit_code = ERROR;
+					goto initialize_end;
+				}
+				else {
+					strcpy ( g_StartDate,  av[3] );
+					strcpy ( g_EndDate,    av[4] );
+				}
+
+
+			}
+			else {
+				sprintf (g_szDtlMsg,"処理モード(2:障害時) 抽出ファイル名 抽出開始日 抽出終了日");
+				send_err (m$invalid_parameter, ERROR, g_szDtlMsg, NULL, NULL, G_STATION);
+				exit_code = ERROR;
+				goto initialize_end;
+			}
+
+			break;
+
+		default:
+			/* 上部でエラーチェック済なので　ここのロジックは通らない */
+			/* 後のカスタマイズの為にdefaultを残しています            */
+			break;
+	}
+
+	memset ( h_FROM_TS, 0x0, sizeof(h_FROM_TS) );
+	memset ( h_TO_TS,   0x0, sizeof(h_TO_TS) );
+
+	/* 抽出条件セット (フォーマット:YYYYMMDD HH24MISS) */
+	switch ( g_mode ) {
+		case USUALITY: /* 通常 */
+			strcpy ( h_TO_TS ,   g_szSystemDate );
+			rc = get_previous_date ( "CZU" );
+			if ( rc != NORMAL ) {
+				exit_code = ERROR;
+				goto initialize_end;
+			}
+			rtrim( h_FROM_TS );
+
+			break;
+
+		case OBSTACLE:/* 障害時 */			
+			strcpy ( h_FROM_TS , g_StartDate );
+			strcat ( h_FROM_TS, " 000000" );
+
+			strcpy ( h_TO_TS ,   g_EndDate );
+			strcat ( h_TO_TS,   " 235959" );
+
+			break;    
+
+			
+		default:
+			/* 上部でエラーチェック済なので　ここのロジックは通らない */
+			/* 後のカスタマイズの為にdefaultを残しています            */
+			break;
+		
+	}
+
+    /* テレバン契約者属性ファイルのオープン */
+    if(( g_pfSendFile = fopen( g_szSendFile, "w" )) == NULL ) {
+		sprintf( g_szDtlMsg, "テレバン契約者属性ファイル%sのオープンに失敗しました。", g_szSendFile );
+		send_err( m$file_open, errno, g_szDtlMsg, NULL, NULL, G_STATION );
+
+		exit_code = ERROR;
+		goto initialize_end;
+
+    }
+	file_open_flag = 1;
+
+	/* 抽出条件をメッセージ出力 */
+	makeExtractionMessage ( h_FROM_TS , h_TO_TS );
+
+    /* 契約者テーブルのカーソルオープン */
+	if( cursorOpen( g_szDtlMsg ) != NORMAL ) {
+		exit_code = ERROR;
+		goto initialize_end;
+        exit( ERROR );
+	}
+
+	cusor_open_flag = 1;
+
+initialize_end:
+
+	if ( exit_code != NORMAL ) {
+		send_err( m$abend_process, ERROR, process_name, "", "", G_STATION );
+		exit ( exit_code );    
+	}
+
+}
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   cursorOpen( char *g_szDtlMsg )                                          */
+/*                                                                           */
+/* Description:                                                              */
+/*   TFB_テレバン契約属性 カーソルオープン                                   */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* g_szDtlMsg      char*         I   メッセージ格納領域                      */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   None                                                                    */
+/*                                                                           */
+/* Return Code:                                                              */
+/*   NORMAL       : 正常終了                                                 */
+/*   ERROR        : カーソルオープンエラー                                   */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/*****************************************************************************/
+static int cursorOpen( char *g_szDtlMsg )
+{
+
+
+    /* カーソル定義 */
+	G_POSITION = __LINE__;
+    EXEC SQL DECLARE CUR_01 CURSOR FOR
+        SELECT
+            CIFNO,							
+            店番,　							
+			契約者番号,				
+			契約解除日
+        FROM
+            TFB_テレバン契約属性                       
+        WHERE
+            承認日 >= TO_DATE(:h_FROM_TS, 'YYYYMMDD HH24MISS')  AND
+			承認日 <  TO_DATE(:h_TO_TS,   'YYYYMMDD HH24MISS')
+        ORDER BY
+            契約者番号;
+
+    /* カーソル・オープン */
+    EXEC SQL OPEN CUR_01;
+    if( sqlca.sqlcode != 0 ) {
+		sprintf( g_szDtlMsg,
+				"カーソル(CUR_01)オープン・エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+		send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+
+        return ERROR;
+    }
+
+    return NORMAL;
+
+}
+
+
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   readTables( char *g_szDtlMsg )                                          */
+/*                                                                           */
+/* Description:                                                              */
+/*   TFB_テレバン契約属性 テーブルの読込                                     */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* g_szDtlMsg      char*         I   メッセージ格納領域                      */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   None                                                                    */
+/*                                                                           */
+/* Return Code:                                                              */
+/*   NORMAL       : 正常終了                                                 */
+/*   ERROR        : テーブルセレクト時エラー                                 */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/*****************************************************************************/
+static int readTables( char *g_szDtlMsg )
+{
+           
+    /* ホスト変数の初期化 */
+    memset( h_CIFNO     , '\0', sizeof( h_CIFNO     ));/* CIFNO */
+    memset( h_EigyoID   , '\0', sizeof( h_EigyoID   ));/* 店番 */
+    memset( h_UserID    , '\0', sizeof( h_UserID    ));/* 契約者番号 */
+    memset( h_KaijoDate , '\0', sizeof( h_KaijoDate ));/* 契約解除日 */
+
+	G_POSITION = __LINE__;
+    EXEC SQL FETCH CUR_01
+        INTO
+			:h_CIFNO :hi_CIFNO,
+			:h_EigyoID :hi_EigyoID,
+			:h_UserID :hi_UserID,
+			:h_KaijoDate :hi_KaijoDate;
+
+    /* エラーチェック */
+    if( sqlca.sqlcode == ORA_NOF ) {
+        return NORMAL;
+    } 
+	else if( sqlca.sqlcode != 0 ) {
+		send_err ( m$emb_error, sqlca.sqlcode, "TFB_テレバン契約属性テーブルの取得でエラーが発生しました", NULL, NULL, G_STATION);
+        
+        return ERROR;
+    }
+
+    return NORMAL;
+	     
+}
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   putSendData( char *g_szDtlMsg )                                         */
+/*                                                                           */
+/* Description:                                                              */
+/*   オペレータ情報提携ファイルへの書き込み                                  */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* g_szDtlMsg      char*         I   メッセージ格納領域                      */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   None                                                                    */
+/*                                                                           */
+/* Return Code:                                                              */
+/*   NORMAL    : 正常終了                                                    */
+/*   ERROR     : データ異常                                                  */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/*****************************************************************************/
+static int putSendData( char *g_szDtlMsg )
+{
+	int rc;
+
+	memset( &g_SendRec, 0x00, sizeof(g_SendRec) );
+
+	/* 取引先番号 */
+	strncpy( g_SendRec, h_CIFNO, 7 );
+	g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+	/* 契約店 */
+	strncat( g_SendRec, h_EigyoID, 3 );
+	g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+	/* 店別CIF 設定なし */
+	g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+	/* 店番 設定なし */
+	g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+	/* 代表口座番号 設定なし */
+	g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+	/* テレバン契約フラグ */
+	if ( hi_KaijoDate != ORA_NULL){
+		/* 解約済み */
+		strcat( g_SendRec, "09" );
+	}
+	else {
+		/* 契約あり */
+		strcat( g_SendRec, "01" );
+	}
+	g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+	/* テレバン投信契約フラグ */
+	rc = setToshinFlag();
+	if (rc != NORMAL){
+		return ERROR;
+	}
+
+	/* 改行コード */
+	/*g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x0d; %01 DELETE */
+	g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x0a;
+
+
+	/* テレバン契約者属性ファイルへの書き込み */
+    if ( fwrite( g_SendRec, (unsigned int)strlen(g_SendRec), 1, g_pfSendFile ) != 1 ) {
+		send_err ( m$file_write, errno, g_szSendFile, g_SendRec , NULL, G_STATION);
+        return ERROR;
+    }
+
+    return NORMAL;
+
+
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   int setToshinFlag( )                                                    */
+/*                                                                           */
+/* Description:                                                              */
+/*   テレバン投信契約フラグ設定                                              */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  --------------------------------------- */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   None                                                                    */
+/*                                                                           */
+/* Return Code:                                                              */
+/*        NORMAL         : 正常                                              */
+/*        ERROR    : SELECT異常                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int setToshinFlag()
+{
+
+
+    /* 契約解除されていない */
+    if (hi_KaijoDate == ORA_NULL){
+		G_POSITION = __LINE__;
+        EXEC SQL SELECT COUNT(*) INTO :h_COUNT
+                FROM TFB_テレバン契約口座
+                WHERE 契約者番号 = :h_UserID
+                  AND 投信口座区分  = '1';
+        if (sqlca.sqlcode < 0){
+            sprintf( g_szDtlMsg, "TFB_テレバン契約口座テーブルの検索に失敗しました。(sqlca.sqlcode=%d)", sqlca.sqlcode );
+			send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+            return(ERROR);
+        }
+
+        if (h_COUNT == 0){
+            /* 契約なし */
+            strcat( g_SendRec, "00" );
+        }
+        else {
+            /* 契約あり */
+            strcat( g_SendRec, "01" );
+        }
+    }
+    else {
+        strcat( g_SendRec, "00" );
+    }
+
+    g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+    return( NORMAL );
+
+}
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*     commit( void )                                                        */
+/* Made by:                                                                  */
+/* Description:ＤＢのコミット                                                */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/*  g_szDtlMsg      *char         O    事象詳細文字列                        */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL : 正常                                                          */
+/*    ERROR  : コミットエラー（システムエラー）                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int commit( VOID )
+{
+
+    /* ＤＢのコミット */
+	G_POSITION = __LINE__;
+    EXEC SQL COMMIT;
+    if (sqlca.sqlcode < 0) {
+        sprintf(g_szDtlMsg,
+                "ＤＢのコミットに失敗しました。(CODE=%ld)",
+                sqlca.sqlcode);
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+
+
+    return NORMAL;
+}
+
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*     rollback( void )                                                      */
+/* Made by:                                                                  */
+/* Description:ＤＢのロールバック                                            */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL : 正常                                                          */
+/*    ERROR  : ロールバックエラー（システムエラー）                          */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int rollback( )
+{
+    
+	/* ＤＢのロールバック */
+	G_POSITION = __LINE__;
+    EXEC SQL ROLLBACK WORK;
+    if (sqlca.sqlcode < 0) {
+        sprintf(g_szDtlMsg,
+                "ＤＢのロールバックに失敗しました。(CODE=%ld)",
+                sqlca.sqlcode);
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+
+    return NORMAL;
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*     finalize( int rc )                                                    */
+/* Made by:                                                                  */
+/* Description:終了処理                                                      */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* rc              int           i   リターンコード                          */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static void finalize( int rc )
+{
+
+    /* ファイルのクローズ */
+	if ( file_open_flag == 1 ) {
+		fclose( g_pfSendFile );
+	}
+    
+    /* カーソルクローズ */
+	if ( cusor_open_flag == 1 ) {
+		EXEC SQL CLOSE CUR_01;
+	}
+
+
+    exit( rc );
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   update_previous_date( const char *process_id )                          */
+/*                                                                           */
+/* Description:                                                              */
+/*   前回抽出日を取得                                                        */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length            I/O    Content                     */
+/* --------------  ---------------------  ---  -------------------------     */
+/* process_id      const char*            i    処理ID                        */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   TX_ログアップロード情報                                                 */
+/*                                                                           */
+/* Return Code:                                                              */
+/*   NORMAL             : 正常                                               */
+/*   ERROR              : 異常                                               */
+/*                                                                           */
+/*****************************************************************************/
+int update_previous_date ( const char *process_id )
+{
+
+    /* TX_ログアップロード情報から前回抽出日を取得 */
+	memset ( h_process_id, 0x0, sizeof(h_process_id));
+	strcpy ( h_process_id , process_id );
+
+	G_POSITION = __LINE__;
+	EXEC SQL UPDATE TX_ログアップロード情報
+		SET 処理開始日 = TO_DATE (:h_TO_TS,'YYYYMMDD HH24MISS')
+			WHERE
+				処理ID = :h_process_id;
+
+	if ( sqlca.sqlcode != 0 ){
+        sprintf( g_szDtlMsg,
+                 "[処理ID=%s]TX_ログアップロード情報の処理開始日の更新に失敗しました。(sqlca.sqlcode=%d)",
+                  h_process_id, sqlca.sqlcode );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+		send_err ( m$sql_statment, sqlca.sqlcode, "UPDATE TX_ログアップロード情報", NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+
+
+	return ( NORMAL );
+
+}
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   get_previous_date( const char *process_id )                             */
+/*                                                                           */
+/* Description:                                                              */
+/*   前回抽出日を取得                                                        */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length            I/O    Content                     */
+/* --------------  ---------------------  ---  -------------------------     */
+/* process_id      const char*            i    処理ID                        */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   TX_ログアップロード情報                                                 */
+/*                                                                           */
+/* Return Code:                                                              */
+/*   NORMAL             : 正常                                               */
+/*   ERROR              : 異常                                               */
+/*                                                                           */
+/*****************************************************************************/
+int get_previous_date ( const char *process_id )
+{
+
+    /* TX_ログアップロード情報から前回抽出日を取得 */
+	memset ( h_process_id, 0x0, sizeof(h_process_id));
+	strcpy ( h_process_id , process_id );
+
+	G_POSITION = __LINE__;
+    EXEC SQL SELECT TO_CHAR(処理開始日, 'YYYYMMDD HH24MISS')
+				INTO :h_FROM_TS 
+			FROM TX_ログアップロード情報
+			WHERE
+				処理ID = :h_process_id;
+
+	if ( sqlca.sqlcode != 0 ){
+        sprintf( g_szDtlMsg,
+                 "[処理ID=%s]TX_ログアップロード情報の検索に失敗しました。(sqlca.sqlcode=%d)",
+                  h_process_id, sqlca.sqlcode );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+		send_err ( m$sql_statment, sqlca.sqlcode, "SELECT TX_ログアップロード情報", NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+
+
+	return ( NORMAL );
+
+}
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   makeExtractionMessage( char *from , char *to )                          */
+/*                                                                           */
+/* Description:                                                              */
+/*   抽出条件をメッセージ出力                                                */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length            I/O    Content                     */
+/* --------------  ---------------------  ---  -------------------------     */
+/* from            char*                  i    開始日付                      */
+/* to              char*                  i    終了日付                      */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   Non                                                                     */
+/*                                                                           */
+/* Return Code:                                                              */
+/*   None                                                                    */
+/*                                                                           */
+/*****************************************************************************/
+void makeExtractionMessage ( char *from , char *to )
+{
+	char from_date [32];
+	char to_date   [32];
+
+	memset ( from_date , 0x0, sizeof(from_date) );
+	memset ( to_date   , 0x0, sizeof(to_date) );
+
+	editDate ( 1, from , from_date );
+	editDate ( 1, to , to_date );
+
+
+	sprintf ( g_szDtlMsg, "[抽出条件] %s から %s までの抽出を実行します", from_date , to_date );
+
+	send_err ( m$message1, 0, g_szDtlMsg, NULL, NULL, G_STATION);
+
+
+}
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   editDate ( int mode, char *src, char *dest )                            */
+/*                                                                           */
+/* Description:                                                              */
+/*   日付を編集                                                              */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length            I/O    Content                     */
+/* --------------  ---------------------  ---  -------------------------     */
+/* mode            int                    i    編集モード(最初は1のみ)       */
+/* src             char*                  i    編集元バッファ                */
+/* dest            char*                  i/o  編集後バッファ                */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   Non                                                                     */
+/*                                                                           */
+/* Return Code:                                                              */
+/*   None                                                                    */
+/*                                                                           */
+/*****************************************************************************/
+void editDate ( int mode, char *src, char *dest ) 
+{
+
+	switch ( mode ) {
+		case 1: /* YYYYMMDD HH24MISS → YYYY/MM/DD HH24:MI:SS */
+			/* 年月日に / を挿入 */
+			memcpy ( dest , &src[0], 4 );
+			dest[4] = '/';
+			strncat ( dest , &src[4], 2 );
+			dest[7] = '/';
+			strncat ( dest , &src[6], 2 );
+			dest[10] = ' ';
+
+			/* 時分秒に : を挿入 */
+			strncat ( dest , &src[9], 2 );
+			dest[13] = ':';
+			strncat ( dest , &src[11], 2 );
+			dest[16] = ':';
+			strncat ( dest , &src[13], 2 );
+			
+			break;
+
+		default:
+			break;
+	}
+
+}
