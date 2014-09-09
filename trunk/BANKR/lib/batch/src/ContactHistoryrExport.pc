@@ -62,6 +62,8 @@
 /* %04 | 14/07/10 | ISID        | キャンペーン名をTRIM                      */
 /* %05 | 14/07/18 | ISID        | 外部データの場合のキャンペーン名不具合    */
 /* %06 | 14/09/03 | ISID        | 顧客管理番号の採番方法修正                */
+/* %07 | 14/09/05 | ISID        | 顧客管理番号の採番方法修正2               */
+/*                              |   画面での外部データ取り込みの対応        */
 /*==========================================================================*/
 /*---------------------------------------------------------------------------*/
 /* Standard include specification                                            */
@@ -2776,15 +2778,12 @@ static int setCampaignName()
 static int setCustomerNo()
 {
 
-	/* 外部データ,営業店WEBデータなどのE の場合はITaで確認(フォーマット不明) */
-
-
-    /* 外部データ取込み履歴 */
-    if ( memcmp( &h_ContactID[0], "E", 1) == 0 ){ /* 未使用 */
-        /* E + 99999 + YYYYMMDD + 99999999  ->  YYMMDD + 999999 */
-        strncat( g_SendRec, &h_ContactID[1], 6 );
-        strncat( g_SendRec, &h_ContactID[7], 5 );
-        sprintf( &g_SendRec[ (unsigned int)strlen(g_SendRec) ], "%1d", h_lEdaNo );
+	/* 外部データ取込み履歴 */
+    if ( memcmp( &h_ContactID[12], "E", 1) == 0 ){ /* %07 Change  */
+        /* YYMMDDhhmmss + E + 999999  ->  YYMMDD + 999999 */
+        strncat( g_SendRec, &h_ContactID[0], 6 );
+        strncat( g_SendRec, &h_ContactID[13], 6 );
+       /* sprintf( &g_SendRec[ (unsigned int)strlen(g_SendRec) ], "%1d", h_lEdaNo );*/
     }
     else if ( memcmp(h_Type, CONTACT_LOG_S_TYPE_EI, 2) == 0 ){ /* %06 Change */
         /* YYYYMMDDhhmmss + E + 9999999  -> YYMMDD + 999999 */
