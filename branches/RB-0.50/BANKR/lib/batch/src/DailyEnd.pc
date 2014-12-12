@@ -1,0 +1,235 @@
+/*==========================================================================*/
+/* Copyright　Information Services International-Dentsu, Ltd.   　          */
+/*==========================================================================*/
+/*                                                                          */
+/* SYSTEM           : BANK・R－CC                                           */
+/*                                                                          */
+/* PROGRAM NAME     : 日次終了処理                                          */
+/*                                                                          */
+/* MODULE NAME      : DailyEnd                                              */
+/*                                                                          */
+/* FUNCTION         : フラグやデータのリセット処理を行う                    */
+/*                                                                          */
+/*                                                                          */
+/* CALLING MODULE   : Main Module.                                          */
+/*                                                                          */
+/* CALLED MODULE    : send_err, errhandler, db_connect                      */
+/*                                                                          */
+/* ENTRY POint      : Main Module.                                          */
+/*                                                                          */
+/* INPUT            : NONE                                                  */
+/*                                                                          */
+/* EXIT             : 正常終了       ・・・NORMAL(0)                        */
+/*                    異常終了       ・・・ERROR (9)                        */
+/*                                                                          */
+/* Mod   yy/mm/dd   Coder           Comment                                 */
+/*-----+----------+-------------+-------------------------------------------*/
+/* %00 | 14/05/01 | ISID        | First Edition.                            */
+/*==========================================================================*/
+/*--------------------------------------------------------------------------*/
+/* Standard include specification                                           */
+/*--------------------------------------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/*--------------------------------------------------------------------------*/
+/* User defined include specification                                       */
+/*--------------------------------------------------------------------------*/
+#include "msg.h"
+#include "common.h"
+#include "batchcommon.h"
+
+EXEC SQL INCLUDE mbproc.h;
+
+/*--------------------------------------------------------------------------*/
+/*                           DEFINE STATEMENTS                              */
+/*--------------------------------------------------------------------------*/
+
+/*--------------------------------------------------------------------------*/
+/*                           EXTERNAL DECLARES                              */
+/*--------------------------------------------------------------------------*/
+char    process_name[43];
+char    g_szDtlMsg[256];                            /* 事象詳細文字列       */
+
+/*--------------------------------------------------------------------------*/
+/*                          STRUCT DECLARATIONS                             */
+/*--------------------------------------------------------------------------*/
+
+/*--------------------------------------------------------------------------*/
+/*                           SUBROUTNE DEFINITION                           */
+/*--------------------------------------------------------------------------*/
+extern int send_err();
+extern int db_connect();
+extern void errhandler();
+
+
+/****************************************************************************/
+/*                                                                          */
+/*                            PROCEDURE DIVISION                            */
+/*                                                                          */
+/****************************************************************************/
+
+/*--------------------------------------------------------------------------*/
+/*                              MAIN ROUTINE                                */
+/*--------------------------------------------------------------------------*/
+main (argc, argv) 
+int     argc;
+char    *argv[];
+{
+/*--------------------------------------------------------------------------*/
+/*                      LOCAL VARIABLE DECLARATIONS                         */
+/*--------------------------------------------------------------------------*/
+    int     rc = 0;
+	int     exit_code;
+
+	/*======================================================================*/
+	/*      INITIALIZATION                                                  */
+	/*======================================================================*/
+
+	/*-----------------------------*/
+	/* Print process start message */
+	/*-----------------------------*/
+    strcpy( G_STATION, "DailyEnd" );
+
+	memset(process_name,0x00,sizeof(process_name));
+    strcpy(process_name,"日次終了処理");
+
+	send_err( m$start_process, NORMAL, process_name, "", "", G_STATION );
+
+	/*-----------------------------*/
+	/* Get environment variable    */
+	/*-----------------------------*/
+
+    /*-----------------------------*/
+    /* Setup error handler routine */
+    /*-----------------------------*/
+    EXEC SQL WHENEVER SQLERROR DO errhandler();
+
+	/*-----------------------------*/
+	/* Connect to database         */
+	/*-----------------------------*/
+    G_POSITION = __LINE__;
+    rc = db_connect();
+    if( rc != 0 ) {
+        send_err( m$db_connect, rc , NULL, NULL, NULL, G_STATION );
+		exit_code = ERROR ;
+        goto ENDPROC;
+    }
+
+    /*
+    **  変数の初期化
+    */
+    exit_code = NORMAL ;
+
+
+	/*======================================================================*/
+    /*                      メ　イ　ン　処　理                              */
+    /*======================================================================*/
+    /*                              */
+    /*  TM_ユーザのフラグリセット   */
+    /*                              */
+    G_POSITION = __LINE__;
+    EXEC SQL UPDATE TM_ユーザ
+		SET     ログインフラグ                  = '0',
+				ログインACDユーザ               = NULL,
+				端末ホスト名                    = NULL,
+				アウトバウンドフラグ            = '0',
+				インバウンドフラグ              = '0'
+					;
+    if( sqlca.sqlcode < 0 ) {
+        sprintf( g_szDtlMsg,
+                 "TM_ユーザのフラグリセットに失敗しました。(sqlca.sqlcode=%d)",sqlca.sqlcode );
+		send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+		send_err ( m$sql_statment, sqlca.sqlcode, "UPDATE TM_ユーザ", NULL, NULL, G_STATION);
+		exit_code = ERROR ;
+        goto ENDPROC_NG;
+    }
+
+
+    /* ---------------------- */
+    /* TFB_テレバンステータス */
+    /* ---------------------- */
+    G_POSITION = __LINE__;
+    EXEC SQL UPDATE TFB_テレバンステータス
+                SET 担当TSRID = NULL
+              WHERE 担当TSRID IS NOT NULL
+                AND 登録日 < sysdate - 2/24;
+    if( sqlca.sqlcode < 0 ) {
+		sprintf( g_szDtlMsg,
+                 "担当TSRIDのリセットに失敗しました。(sqlca.sqlcode=%d)",sqlca.sqlcode );
+		send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+		send_err ( m$sql_statment, sqlca.sqlcode, "UPDATE TFB_テレバンステータス.担当TSRID", NULL, NULL, G_STATION);
+		exit_code = ERROR ;
+        goto ENDPROC_NG;
+    }
+
+
+
+    G_POSITION = __LINE__;
+    EXEC SQL UPDATE TFB_テレバンステータス
+                SET 利用開始日時 = NULL
+              WHERE 利用開始日時 IS NOT NULL
+                AND 利用開始日時 < sysdate - 2/24;
+    if( sqlca.sqlcode < 0 ) {
+		sprintf( g_szDtlMsg,
+                 "利用開始日時のリセットに失敗しました。(sqlca.sqlcode=%d)",sqlca.sqlcode );
+		send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+		send_err ( m$sql_statment, sqlca.sqlcode, "UPDATE TFB_テレバンステータス.利用開始日時", NULL, NULL, G_STATION);
+		exit_code = ERROR ;
+        goto ENDPROC_NG;
+    }
+
+
+    /*
+    **  TX_コール顧客制御のリセット
+    */
+	/* (注意点)                                                                                  */
+	/* TRUNCATE を実行すると、暗黙コミットされるので、ここでエラーになってもロールバックされない */
+	/* 上記のUPDATEは、再ラン可能で、また、ここでエラーになってもロールバックする必要はない      */
+    G_POSITION = __LINE__;
+    EXEC SQL 
+        TRUNCATE TABLE TX_コール顧客制御;
+    if (sqlca.sqlcode < 0) {
+		sprintf( g_szDtlMsg,
+                 "TX_コール顧客制御のリセットに失敗しました。(sqlca.sqlcode=%d)",sqlca.sqlcode );
+		send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+		send_err ( m$sql_statment, sqlca.sqlcode, "TRUNCATE TABLE TX_コール顧客制御", NULL, NULL, G_STATION);
+		exit_code = ERROR ;
+        goto ENDPROC_NG;
+    }
+
+
+
+    /*======================================================================*/
+    /*      TERMINATION                                                     */
+    /*======================================================================*/
+    /*
+    **  正常終了
+    */
+    EXEC SQL COMMIT;
+
+	goto ENDPROC ;
+
+    /*
+    **  異常終了
+    */
+ENDPROC_NG:
+    /* コネクト開放処理 */
+    EXEC SQL ROLLBACK WORK;
+
+	goto ENDPROC ;
+
+ENDPROC:
+    if ( exit_code == NORMAL ) {
+        send_err( m$stop_process, NORMAL, process_name, "", "", G_STATION );
+    } 
+	else {
+        send_err( m$abend_process, ERROR, process_name, "", "", G_STATION );
+        exit_code = ERROR;
+    }
+
+    exit( exit_code );
+
+
+}

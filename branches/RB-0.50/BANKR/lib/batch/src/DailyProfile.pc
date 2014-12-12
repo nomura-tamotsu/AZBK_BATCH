@@ -1,0 +1,1358 @@
+/*==========================================================================*/
+/* Copyright　Information Services International-Dentsu, Ltd.   　          */
+/*==========================================================================*/
+/*                                                                          */
+/* SYSTEM           : BANK・R－CC                                           */
+/*                                                                          */
+/* PROGRAM NAME     : 顧客プロファイル登録・更新                            */
+/*                                                                          */
+/* MODULE NAME      : DailyPersonnel                                        */
+/*                                                                          */
+/* FUNCTION         : 顧客プロファイル登録・更新処理を行う                  */
+/*                                                                          */
+/*                                                                          */
+/* CALLING MODULE   : Main Module.                                          */
+/*                                                                          */
+/* CALLED MODULE    : send_err, errhandler, db_connect                      */
+/*                                                                          */
+/* ENTRY POint      : Main Module.                                          */
+/*                                                                          */
+/* INPUT            : argv[1]・・顧客プロファイル名(ﾌﾙﾊﾟｽ)                  */
+/*                  : argv[2]・・処理結果ファイル名(ﾌﾙﾊﾟｽ)                  */
+/*                                                                          */
+/* EXIT             : 正常終了       ・・・NORMAL(0)                        */
+/*                    異常終了       ・・・ERROR (9)                        */
+/*                                                                          */
+/* Mod   yy/mm/dd   Coder           Comment                                 */
+/*-----+----------+-------------+-------------------------------------------*/
+/* %00 | 14/04/16 | ISID        | First Edition.                            */
+/*==========================================================================*/
+/*---------------------------------------------------------------------------*/
+/* Standard include specification                                            */
+/*---------------------------------------------------------------------------*/
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <ctype.h>
+#include <errno.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <time.h>
+
+/*---------------------------------------------------------------------------*/
+/* User defined include specification                                        */
+/*---------------------------------------------------------------------------*/
+#include "msg.h"
+#include "common.h"
+#include "batchcommon.h"
+#include "apl_common.h"
+
+EXEC SQL INCLUDE mbproc.h;
+
+/*---------------------------------------------------------------------------*/
+/* Internal macro definition                                                 */
+/*---------------------------------------------------------------------------*/
+
+typedef struct _RECV_FILE_DATA { /* 顧客プロファイル */
+    char  szRecordId[1];                             /* 処理区分             */
+    char  szBranchNo[3];                             /* 店番                 */
+    char  szCIF[10];                                 /* CIFNO                */
+    char  szSetDate[8];                              /* 登録日               */
+    char  szTekisei[1];                              /* 借入適正状況         */
+    char  szShokuCode[2];                            /* 職業コード           */
+    char  szShokuRemark[40];                         /* 職業備考             */
+    char  szIncomeCode[2];                           /* 年収コード           */
+    char  szAssetsCode[2];                           /* 金融資産コード       */
+    char  szFundsPlanCode[2];                        /* 運用方針コード       */
+    char  szMotifCode[2];                            /* 取引動機コード       */
+    char  szSetup[1];                                /* 仕組預金             */
+    char  szGaika[1];                                /* 外貨預金             */
+    char  szTNenkin[1];                              /* 円建定額年金保険     */
+    char  szHNenkin[1];                              /* 円建変額年金保険     */
+    char  szGaikaNenkin[1];                          /* 外貨建年金保険       */
+    char  szStock[1];                                /* 株式投信             */
+    char  szShinyo[1];                               /* 信用先物ワラント     */
+    char  szGaiMMF[1];                               /* 外国証券投信MMF      */
+    char  szTShasai[1];                              /* 転換社債             */
+    char  szKShasai[1];                              /* 公社債投信MMF        */
+    char  szNRenTel[20];                             /* 日中連絡先           */
+    char  szNRenRemark[40];                          /* 日中連絡先備考       */
+    char  szFiller1[112];                            /* 予備                 */
+    char  szLineFeedCode[1];                         /* 改行                 */
+} RECV_FILE_DATA;
+
+typedef struct _COUNT {
+    int  iRecNum;                              /* 処理レコード件数           */
+    int  iOkNum ;                              /* 正常終了レコード件数       */
+    int  iOkNumW;                              /* (未commit分)               */
+    int  iInsNum;                              /* 正常(うち登録レコード件数) */
+    int  iInsNumW;                             /* (未commit分)               */
+    int  iUpdNum;                              /* 正常(うち登録レコード件数) */
+    int  iUpdNumW;                             /* (未commit分)               */
+    int  iDelNum;                              /* 正常(うち削除レコード件数) */
+    int  iDelNumW;                             /* (未commit分)               */
+    int  iNgNum ;                              /* 異常終了レコード件数       */
+} COUNT;
+
+/*---------------------------------------------------------------------------*/
+/* User Local defined  specification                                         */
+/*---------------------------------------------------------------------------*/
+#define L_WRITE_END                     1
+#define L_WRITE_LOG                     0
+
+/*---------------------------------------------------------------------------*/
+/* Global variable specification                                             */
+/*---------------------------------------------------------------------------*/
+/* 設定ファイル項目（ホスト変数以外）*/
+char  g_szRecvFile[AP_CONFIG_LINE];                  /* 顧客プロファイル     */
+char  g_szLogFile[AP_CONFIG_LINE];                   /* 処理結果ファイル     */
+
+/* 業務設定値ファイル */
+char  g_szRecordId[AP_GYO_CONFIG_DATA_VALUE];        /* 処理区分             */
+int   g_iCommitSU;                                   /* 分割コミット件数     */
+
+/* ファイルポインタ */
+FILE *g_pfRecvFile;
+FILE *g_pfLogFile;
+
+char g_szDtlMsg           [AP_C_NOTE_LEN_H];         /* 事象詳細文字列       */
+
+char    process_name[43];
+char    g_work[1024];
+
+int file_open_flag1  = 0;		/* ファイルオープンフラグ(データファイル用) */
+int file_open_flag2  = 0;		/* ファイルオープンフラグ(処理結果ファイル用)  */
+
+/*---------------------------------------------------------------------------*/
+/* Host Variable                                                             */
+/*---------------------------------------------------------------------------*/
+EXEC SQL INCLUDE SQLCA;
+EXEC SQL BEGIN DECLARE SECTION;
+/* ＤＢ接続情報 */
+
+/* TF_顧客プロファイルテーブル  */
+    char  h_BranchNo[4];                             /* 店番                 */
+    char  h_CIF[11];                                 /* CIFNO                */
+    char  h_SetDate[9];                              /* 登録日               */
+    char  h_Tekisei[2];                              /* 借入適正状況         */
+    char  h_ShokuCode[3];                            /* 職業コード           */
+    varchar          h_ShokuRemark[41];             /* 職業備考             */
+    short hi_ShokuRemark;
+    char  h_IncomeCode[3];                           /* 年収コード           */
+    char  h_AssetsCode[3];                           /* 金融資産コード       */
+    char  h_FundsPlanCode[3];                        /* 運用方針コード       */
+    char  h_MotifCode[3];                            /* 取引動機コード       */
+    char  h_Setup[2];                                /* 仕組預金             */
+    char  h_Gaika[2];                                /* 外貨預金             */
+    char  h_TNenkin[2];                              /* 円建定額年金保険     */
+    char  h_HNenkin[2];                              /* 円建変額年金保険     */
+    char  h_GaikaNenkin[2];                          /* 外貨建年金保険       */
+    char  h_Stock[2];                                /* 株式投信             */
+    char  h_Shinyo[2];                               /* 信用先物ワラント     */
+    char  h_GaiMMF[2];                               /* 外国証券投信貨MMF    */
+    char  h_TShasai[2];                              /* 転換社債             */
+    char  h_KShasai[2];                              /* 公社債投信MMF        */
+    char  h_NRenTel[21];                             /* 日中連絡先           */
+    short hi_NRenTel;
+    varchar          h_NRenRemark[41];              /* 日中連絡先備考       */
+    short hi_NRenRemark;
+
+    long  h_PROFILE_CNT;                         /* 顧客プロファイルカウント */
+
+EXEC SQL END DECLARE SECTION;
+
+/*---------------------------------------------------------------------------*/
+/* Internal function prototype                                               */
+/*---------------------------------------------------------------------------*/
+extern int send_err();
+extern void errhandler();
+extern int db_connect();
+void rtrim();
+void dump();
+
+static void initialize( int ac, char *av[] );
+static int readTables( RECV_FILE_DATA *pData, char *g_szDtlMsg );
+static int checkFilles( RECV_FILE_DATA *pData, char *g_szDtlMsg );
+static int insertTables( char *g_szDtlMsg );
+static int updateTables( char *g_szDtlMsg );
+static int deleteTables( char *g_szDtlMsg );
+
+static int putAcctLogFile(int tp, RECV_FILE_DATA *pData, COUNT *dCount, int rc, char *g_szDtlMsg );
+static int commit( void );
+static int rollback( void );
+static void finalize( int rc, int iRecNum, int iOkNum );
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*            int main( int argc, char *argv[] )                             */
+/* Made by:                                                                  */
+/* Description:メイン処理                                                    */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/*    int    argc       引数の数                                             */
+/*    char  *argv[]     argv[1]      顧客プロファイル名（フルパス）          */
+/*                      argv[2]      ログファイル名（フルパス）              */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    None                                                                   */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+int main( int argc, char *argv[] )
+{
+	int     exit_code = NORMAL;
+	int		rc = NORMAL;
+	unsigned int RecvSt;
+
+    RECV_FILE_DATA    dData;                         /* データ・レコード     */
+    COUNT             dCount;                        /* カウンター           */
+
+    int               rc_fin = 0;                    /* 最後のログ出力のRC   */
+    int               iCommitCnt = 0;      /* 顧客プロファイルの処理済み件数 */
+
+
+
+	/*-----------------------------*/
+    /* Print process start message */
+    /*-----------------------------*/
+
+    strcpy( G_STATION, "DailyProfile" );
+	
+	memset(process_name,0x00,sizeof(process_name));
+    strcpy(process_name,"日次顧客プロファイルデータ取込処理");
+
+    send_err( m$start_process, NORMAL, process_name, "", "", G_STATION );
+
+	memset( &dCount, '\0', sizeof(dCount));
+
+    /*-------------------------------------------------------*/
+    /* Setup error handler routine                           */
+    /*-------------------------------------------------------*/
+    EXEC SQL WHENEVER SQLERROR DO errhandler();
+
+    G_POSITION = __LINE__;
+    rc = db_connect() ;
+    if ( rc != NORMAL ) {
+        send_err( m$db_connect, rc, "", "", "", G_STATION );
+        rc = ERROR ;
+        goto ENDPROC ;
+    }
+
+
+
+    /* 初期化処理 */
+    initialize( argc, argv );
+
+
+
+    while( 1 ) {
+
+        memset( g_szDtlMsg, 0x00, sizeof( g_szDtlMsg ) );
+
+        /* -------------------------- */
+        /* 人事情報ファイルからの読込 */
+        /* -------------------------- */
+		RecvSt = (unsigned int)fread( (char *) &dData, sizeof( RECV_FILE_DATA ), 1, g_pfRecvFile );
+
+		if (RecvSt != 1) {
+			if (feof( g_pfRecvFile ) != 0) {
+				rc = NORMAL;
+				break;
+			}
+			else{
+				sprintf(g_szDtlMsg,"顧客プロファイル(%s)の読込に失敗しました。",g_szRecvFile);
+				send_err ( m$file_read, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+
+				rc = ERROR;
+				break;
+			}
+		}
+		else{
+			rc = NORMAL;
+		}
+
+        dCount.iRecNum++;
+
+
+
+        /* １万レコード毎にメッセージ出力 */
+        if ( (dCount.iRecNum % 10000) == 0 ){
+			sprintf ( g_szDtlMsg ,"[%d]レコード処理完了。。。", dCount.iRecNum);
+			send_err ( m$message1, 0, g_szDtlMsg, NULL, NULL, G_STATION);
+        }
+
+        /* 各テーブルの読込 */
+        if ( (rc = readTables( &dData, g_szDtlMsg )) != NORMAL ){
+            goto WriteFile;
+        }
+
+        /* 顧客情報ファイルのチェック */
+        if ( (rc = checkFilles( &dData, g_szDtlMsg )) != NORMAL ){
+            goto WriteFile;
+        }
+
+        /* -------------- */
+        /* 処理区分：新規 */
+        /* -------------- */
+        if ( atoi(g_szRecordId) == AP_C_SYORI_NEW ){
+            if ( ( rc = insertTables(g_szDtlMsg) ) != NORMAL ){
+                goto WriteFile;
+            }
+            dCount.iInsNumW++;
+            dCount.iOkNumW++;
+        }
+        /* -------------- */
+        /* 処理区分：変更 */
+        /* -------------- */
+        else if ( atoi(g_szRecordId) == AP_C_SYORI_UPDATE ) {
+            if ( ( rc = updateTables(g_szDtlMsg) ) != NORMAL ){
+                goto WriteFile;
+            }
+            dCount.iUpdNumW++;
+            dCount.iOkNumW++;
+        }
+        /* -------------- */
+        /* 処理区分：削除 */
+        /* -------------- */
+        else if ( atoi(g_szRecordId) == AP_C_SYORI_DELETE ) {
+            if ( ( rc = deleteTables(g_szDtlMsg) ) != NORMAL ){
+                goto WriteFile;
+            }
+            dCount.iDelNumW++;
+            dCount.iOkNumW++;
+        }
+
+        iCommitCnt++;                          /* 顧客プロファイルの処理件数 */
+
+#if 0
+		/* 再ランできないのでここでのCOMMITを削除 */
+        /* 指定件数に到達したらＤＢのコミット */
+        if ( iCommitCnt == g_iCommitSU) {
+            dCount.iOkNum = dCount.iOkNum + dCount.iOkNumW;
+            dCount.iInsNum = dCount.iInsNum + dCount.iInsNumW;
+            dCount.iUpdNum = dCount.iUpdNum + dCount.iUpdNumW;
+            dCount.iDelNum = dCount.iDelNum + dCount.iDelNumW;
+            iCommitCnt = 0;
+            dCount.iOkNumW = 0;
+            dCount.iInsNumW = 0;
+            dCount.iUpdNumW = 0;
+            dCount.iDelNumW = 0;
+
+            if ((rc = commit( g_szDtlMsg )) != NORMAL ){
+                goto WriteFile;
+            }
+        }
+#endif
+
+WriteFile:
+        if ( rc == ERROR ) {
+            dCount.iOkNumW = 0;
+            dCount.iInsNumW = 0;
+            dCount.iUpdNumW = 0;
+            dCount.iDelNumW = 0;
+            rollback();
+            iCommitCnt = 0;
+			dCount.iNgNum++;
+        }
+
+        /* 顧客情報ログ出力 */
+        putAcctLogFile(L_WRITE_LOG, &dData, &dCount, rc, g_szDtlMsg );
+        if ( rc == ERROR ) {
+            break;
+        }
+    } /* while loop end */
+
+	if( rc == NORMAL && dCount.iRecNum == 0 ){
+		sprintf ( g_szDtlMsg, "顧客プロファイル(%s)は０件ファイルです。", g_szRecvFile );
+		send_err (m$message1, NORMAL, g_szDtlMsg, NULL, NULL, G_STATION);
+    }
+
+    if ( rc != NORMAL ) {
+        rollback();
+    }
+    else{
+        /* ＤＢのコミット */
+        if( iCommitCnt > 0 ){
+            dCount.iOkNum  = dCount.iOkNum  + iCommitCnt;
+            dCount.iInsNum = dCount.iInsNum + dCount.iInsNumW;
+            dCount.iUpdNum = dCount.iUpdNum + dCount.iUpdNumW;
+            dCount.iDelNum = dCount.iDelNum + dCount.iDelNumW;
+            rc = commit();
+        }
+    }
+
+    rc_fin = putAcctLogFile(L_WRITE_END, &dData, &dCount, rc, g_szDtlMsg );
+    if (rc == NORMAL) {
+        rc = rc_fin;
+    }
+
+
+ENDPROC:
+
+	if ( rc == NORMAL ) {
+        send_err( m$stop_process, NORMAL, process_name, "", "", G_STATION );
+    } else {
+        send_err( m$abend_process, ERROR, process_name, "", "", G_STATION );
+    }
+
+	finalize( rc, dCount.iRecNum, dCount.iOkNum );
+
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   void initialize( int ac, char *av[] )                                   */
+/*                                                                           */
+/* Made by:                                                                  */
+/* Description:                                                              */
+/*      初期化処理                                                           */
+/*                                                                           */
+/* Arguments:                                                                */
+/* Type     Name              I/O    Content                                 */
+/* -------- ----------------- --- ------------------------------------------ */
+/*    int    ac                I  引数の数                                   */
+/*    char  *av[]     argv[1]  I  顧客プロファイル（フルパス）               */
+/*                    argv[2]  I  処理結果ファイル名（フルパス）             */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*                                                                           */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static void initialize( int ac, char *av[] )
+{
+	int exit_code=NORMAL;
+
+    /* コミット件数の取得 */
+    g_iCommitSU = 100;
+
+
+	/* 起動パラメータを使用する */
+    if ( ac == 3 ) {
+        strcpy(g_szRecvFile,  av[1]); /* 人顧客プロファイル                    */
+        strcpy(g_szLogFile,   av[2]); /* 処理結果ファイル                      */
+    }
+	else {
+		sprintf (g_szDtlMsg,"顧客プロファイル 処理結果ファイル");
+		send_err (m$invalid_parameter, ERROR, g_szDtlMsg, NULL, NULL, G_STATION);
+		exit_code = ERROR;
+		goto initialize_end;
+    }
+
+
+
+    /* 顧客プロファイルのオープン */
+    if (( g_pfRecvFile = fopen( g_szRecvFile, "r" )) == NULL){
+		sprintf( g_szDtlMsg, "ファイル%sのオープンに失敗しました。", g_szRecvFile );
+		send_err( m$file_open, errno, g_szDtlMsg, NULL, NULL, G_STATION );
+		exit_code = ERROR;
+		goto initialize_end;
+    }
+	file_open_flag1 =1;
+
+    /* 処理結果ログファイルへのオープン */
+    if (( g_pfLogFile = fopen( g_szLogFile, "w" )) == NULL){
+		sprintf( g_szDtlMsg, "ファイル%sのオープンに失敗しました。", g_szLogFile );
+		send_err( m$file_open, errno, g_szDtlMsg, NULL, NULL, G_STATION );
+		exit_code = ERROR;
+		goto initialize_end;
+    }
+	file_open_flag2 =1;
+
+initialize_end:
+
+	if ( exit_code != NORMAL ) {
+		send_err( m$abend_process, ERROR, process_name, "", "", G_STATION );
+		exit ( exit_code );    
+	}
+
+}
+
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*          int readTables( RECV_FILE_DATA *pData, char *g_szDtlMsg )        */
+/* Made by:                                                                  */
+/* Description : TF_顧客プロファイルテーブルの読込                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* RECV_FILE_DATA   *pData       O     顧客プロファイル格納エリア            */
+/* g_szDtlMsg       char*        I                                           */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    TF_顧客プロファイル  : TF_顧客プロファイルテーブル                     */
+/*                                                                           */
+/* Return Code:                                                              */
+/*    NORMAL       : 正常終了                                                */
+/*    ERROR        : テーブルアクセスエラー                                  */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int readTables( RECV_FILE_DATA *pData, char *g_szDtlMsg )
+{
+
+
+    /* 店番 */
+    memset( h_BranchNo, '\0', sizeof(h_BranchNo) );
+    strncpy( h_BranchNo, pData->szBranchNo, sizeof(pData->szBranchNo) );
+
+    /* CIFNO */
+    memset( h_CIF, '\0', sizeof(h_CIF) );
+    strncpy( h_CIF, pData->szCIF, sizeof(pData->szCIF) );
+
+    h_PROFILE_CNT = 0;                           /* 顧客プロファイルカウント */
+
+    /* TF_顧客プロファイルテーブルチェック用 */
+	G_POSITION = __LINE__;
+    EXEC SQL SELECT COUNT(*) INTO :h_PROFILE_CNT FROM TF_顧客プロファイル
+        WHERE
+             CIFNO = :h_CIF;
+    if (sqlca.sqlcode != 0 && sqlca.sqlcode != ORA_NOF){
+        sprintf( g_szDtlMsg, 
+                 "[CIFNO=%s]TF_顧客プロファイルテーブルの検索に失敗しました。(sqlca.sqlcode=%d)",
+                  h_CIF, sqlca.sqlcode );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+		send_err ( m$sql_statment, sqlca.sqlcode, "SELECT COUNT(*) TF_顧客プロファイル", NULL, NULL, G_STATION);
+        return ERROR;
+    }
+
+    return NORMAL;
+}
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   int checkFilles( RECV_FILE_DATA *pData,char *g_szDtlMsg )               */
+/*                                                                           */
+/* Description:                                                              */
+/*   各種チェック                                                            */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* RECV_FILE_DATA  *pData        I   顧客情報ファイル格納エリア              */
+/* g_szDtlMsg      char*         I                                           */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   None                                                                    */
+/*                                                                           */
+/* Return Code:                                                              */
+/*        NORMAL: 正常                                                       */
+/*        ERROR : データ不正                                                 */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int checkFilles( RECV_FILE_DATA *pData, char *g_szDtlMsg )
+{
+
+    /* 改行コード */
+    if (pData->szLineFeedCode[0] != 0x0a){
+        sprintf( g_szDtlMsg, 
+				 "顧客プロファイルに改行コードの設定がありません。");
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+
+
+	/* 処理区分 */
+    if( pData->szRecordId[0] == 0x00 || pData->szRecordId[0] == 0x20 ) {
+        strcpy( g_szDtlMsg, "処理区分の設定がありません。");
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+
+	memset( g_szRecordId, '\0', sizeof(g_szRecordId));  /* 処理区分          */
+    sprintf( g_szRecordId, "%.*s", sizeof(pData->szRecordId), pData->szRecordId );
+
+	/* 処理区分チェック */
+    /* -------------------------------------------------------------------- */
+    /* 以下の場合はエラー                                                   */
+    /* 処理区分が'１'より小　または                                         */
+    /* 処理区分が'３'より大                                                 */
+    /* -------------------------------------------------------------------- */
+    if ( ( atoi(g_szRecordId) < AP_C_SYORI_NEW ) ||
+         ( atoi(g_szRecordId) > AP_C_SYORI_DELETE ) ){
+        sprintf( g_szDtlMsg, 
+                 "[店番=%s CIFNO=%s]顧客プロファイルの処理区分(%s)が異常です。",
+                 h_BranchNo, h_CIF, g_szRecordId );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+
+    /* 処理区分との整合性 */
+    if ( atoi(g_szRecordId) == AP_C_SYORI_NEW ){
+        if (h_PROFILE_CNT != 0){
+			sprintf( g_szDtlMsg,
+                 "[店番=%s CIFNO=%s]既にTF_顧客プロファイルに存在するデータです。",
+                  h_BranchNo, h_CIF);
+			send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+
+            return ERROR;
+        }
+    }
+    else if ( atoi(g_szRecordId) == AP_C_SYORI_UPDATE ||
+              atoi(g_szRecordId) == AP_C_SYORI_DELETE ){
+        if (h_PROFILE_CNT == 0){
+            sprintf( g_szDtlMsg,
+					 "[店番=%s CIFNO=%s]TF_顧客プロファイルに存在しないデータです。",
+                     h_BranchNo, h_CIF);
+            send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+            return ERROR;
+        }
+    }
+	/*
+    else {
+        sprintf( g_szDtlMsg, 
+                 "[店番=%s CIFNO=%s]顧客プロファイルの処理区分(%s)が異常です。",
+                 h_BranchNo, h_CIF, g_szRecordId);
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+	*/
+
+
+    /* 店番 */
+    if( pData->szBranchNo[0] == 0x00 || pData->szBranchNo[0] == 0x20 ){
+        sprintf( g_szDtlMsg, "[CIFNO=%s]店番の設定がありません。", h_CIF );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+
+    /* CIFNO */
+    if( pData->szCIF[0] == 0x00 || pData->szCIF[0] == 0x20 ){
+        sprintf( g_szDtlMsg, "[店番=%s]CIFNOの設定がありません。", h_BranchNo );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+
+    /* 登録日 */
+    if( pData->szSetDate[0] == 0x00 || pData->szSetDate[0] == 0x20 ){
+        sprintf( g_szDtlMsg, "[店番=%s CIFNO=%s]登録日の設定がありません。",
+                 h_BranchNo, h_CIF );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+    memset( h_SetDate, '\0', sizeof(h_SetDate) );
+    strncpy( h_SetDate, pData->szSetDate, sizeof(pData->szSetDate) );
+
+    /* 処理区分：削除の場合 */
+    if ( atoi(g_szRecordId) == AP_C_SYORI_DELETE ){
+        return NORMAL;
+    }
+
+    /* 借入適正状況 */
+    if( pData->szTekisei[0] == 0x00 || pData->szTekisei[0] == 0x20 ){
+        sprintf( g_szDtlMsg, "[店番=%s CIFNO=%s]借入適正状況の設定がありません。",
+                 h_BranchNo, h_CIF );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+    memset( h_Tekisei, '\0', sizeof(h_Tekisei) );
+    strncpy( h_Tekisei, pData->szTekisei, sizeof(pData->szTekisei) );
+
+    /* 職業コード */
+    if( pData->szShokuCode[0] == 0x00 || pData->szShokuCode[0] == 0x20 ){
+        sprintf( g_szDtlMsg, "[店番=%s CIFNO=%s]職業コードの設定がありません。",
+                 h_BranchNo, h_CIF );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+    memset( h_ShokuCode, '\0', sizeof(h_ShokuCode) );
+    strncpy( h_ShokuCode, pData->szShokuCode, sizeof(pData->szShokuCode) );
+
+    /* 職業備考 値なし許可 */
+    memset( &h_ShokuRemark, '\0', sizeof(h_ShokuRemark) );
+    h_ShokuRemark.len = 0;
+    hi_ShokuRemark = ORA_NULL;
+    if( pData->szShokuRemark[0] != 0x00 && pData->szShokuRemark[0] != 0x20 ){
+        strncpy( h_ShokuRemark.arr, pData->szShokuRemark, sizeof(pData->szShokuRemark) );
+        h_ShokuRemark.len = (unsigned int)strlen(h_ShokuRemark.arr);
+        hi_ShokuRemark = ORA_NOT_NULL;
+    }
+
+    /* 年収コード */
+    if( pData->szIncomeCode[0] == 0x00 || pData->szIncomeCode[0] == 0x20 ){
+        sprintf( g_szDtlMsg, "[店番=%s CIFNO=%s]年収コードの設定がありません。",
+                 h_BranchNo, h_CIF );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+    memset( h_IncomeCode, '\0', sizeof(h_IncomeCode) );
+    strncpy( h_IncomeCode, pData->szIncomeCode, sizeof(pData->szIncomeCode) );
+
+    /* 金融資産コード */
+    if( pData->szAssetsCode[0] == 0x00 || pData->szAssetsCode[0] == 0x20 ){
+        sprintf( g_szDtlMsg, "[店番=%s CIFNO=%s]金融資産コードの設定がありません。",
+                 h_BranchNo, h_CIF );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+    memset( h_AssetsCode, '\0', sizeof(h_AssetsCode) );
+    strncpy( h_AssetsCode, pData->szAssetsCode, sizeof(pData->szAssetsCode) );
+
+    /* 運用方針コード */
+    if( pData->szFundsPlanCode[0] == 0x00 || pData->szFundsPlanCode[0] == 0x20 ){
+        sprintf( g_szDtlMsg, "[店番=%s CIFNO=%s]運用方針コードの設定がありません。",
+                 h_BranchNo, h_CIF );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+    memset( h_FundsPlanCode, '\0', sizeof(h_FundsPlanCode) );
+    strncpy( h_FundsPlanCode, pData->szFundsPlanCode, sizeof(pData->szFundsPlanCode) );
+
+    /* 取引動機コード */
+    if( pData->szMotifCode[0] == 0x00 || pData->szMotifCode[0] == 0x20 ){
+        sprintf( g_szDtlMsg, "[店番=%s CIFNO=%s]取引動機コードの設定がありません。",
+                 h_BranchNo, h_CIF );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+    memset( h_MotifCode, '\0', sizeof(h_MotifCode) );
+    strncpy( h_MotifCode, pData->szMotifCode, sizeof(pData->szMotifCode) );
+
+    /* 仕組預金 */
+    if( pData->szSetup[0] == 0x00 || pData->szSetup[0] == 0x20 ){
+        sprintf( g_szDtlMsg, "[店番=%s CIFNO=%s]仕組預金の設定がありません。",
+                 h_BranchNo, h_CIF );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+    memset( h_Setup, '\0', sizeof(h_Setup) );
+    strncpy( h_Setup, pData->szSetup, sizeof(pData->szSetup) );
+
+    /* 外貨預金 */
+    if( pData->szGaika[0] == 0x00 || pData->szGaika[0] == 0x20 ){
+        sprintf( g_szDtlMsg, "[店番=%s CIFNO=%s]外貨預金の設定がありません。",
+                 h_BranchNo, h_CIF );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+    memset( h_Gaika, '\0', sizeof(h_Gaika) );
+    strncpy( h_Gaika, pData->szGaika, sizeof(pData->szGaika) );
+
+    /* 円建定額年金保険 */
+    if( pData->szTNenkin[0] == 0x00 || pData->szTNenkin[0] == 0x20 ){
+        sprintf( g_szDtlMsg, "[店番=%s CIFNO=%s]円建定額年金保険の設定がありません。",
+                 h_BranchNo, h_CIF );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+    memset( h_TNenkin, '\0', sizeof(h_TNenkin) );
+    strncpy( h_TNenkin, pData->szTNenkin, sizeof(pData->szTNenkin) );
+
+    /* 円建変額年金保険 */
+    if( pData->szHNenkin[0] == 0x00 || pData->szHNenkin[0] == 0x20 ){
+        sprintf( g_szDtlMsg, "[店番=%s CIFNO=%s]円建変額年金保険の設定がありません。",
+                 h_BranchNo, h_CIF );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+    memset( h_HNenkin, '\0', sizeof(h_HNenkin) );
+    strncpy( h_HNenkin, pData->szHNenkin, sizeof(pData->szHNenkin) );
+
+    /* 外貨建年金保険 */
+    if( pData->szGaikaNenkin[0] == 0x00 || pData->szGaikaNenkin[0] == 0x20 ){
+        sprintf( g_szDtlMsg, "[店番=%s CIFNO=%s]外貨建年金保険の設定がありません。",
+                 h_BranchNo, h_CIF );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+    memset( h_GaikaNenkin, '\0', sizeof(h_GaikaNenkin) );
+    strncpy( h_GaikaNenkin, pData->szGaikaNenkin, sizeof(pData->szGaikaNenkin) );
+
+    /* 株式投信 */
+    if( pData->szStock[0] == 0x00 || pData->szStock[0] == 0x20 ){
+        sprintf( g_szDtlMsg, "[店番=%s CIFNO=%s]株式投信の設定がありません。",
+                 h_BranchNo, h_CIF );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+    memset( h_Stock, '\0', sizeof(h_Stock) );
+    strncpy( h_Stock, pData->szStock, sizeof(pData->szStock) );
+
+    /* 信用・先物・ワラント */
+    if( pData->szShinyo[0] == 0x00 || pData->szShinyo[0] == 0x20 ){
+        sprintf( g_szDtlMsg, "[店番=%s CIFNO=%s]信用・先物・ワラントの設定がありません。",
+                 h_BranchNo, h_CIF );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+    memset( h_Shinyo, '\0', sizeof(h_Shinyo) );
+    strncpy( h_Shinyo, pData->szShinyo, sizeof(pData->szShinyo) );
+
+    /* 外国証券投信MMF */
+    if( pData->szGaiMMF[0] == 0x00 || pData->szGaiMMF[0] == 0x20 ){
+        sprintf( g_szDtlMsg, "[店番=%s CIFNO=%s]外国証券投信MMFの設定がありません。",
+                 h_BranchNo, h_CIF );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+    memset( h_GaiMMF, '\0', sizeof(h_GaiMMF) );
+    strncpy( h_GaiMMF, pData->szGaiMMF, sizeof(pData->szGaiMMF) );
+
+    /* 転換社債 */
+    if( pData->szTShasai[0] == 0x00 || pData->szTShasai[0] == 0x20 ){
+        sprintf( g_szDtlMsg, "[店番=%s CIFNO=%s]転換社債の設定がありません。",
+                 h_BranchNo, h_CIF );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+    memset( h_TShasai, '\0', sizeof(h_TShasai) );
+    strncpy( h_TShasai, pData->szTShasai, sizeof(pData->szTShasai) );
+
+    /* 公社債投信MMF */
+    if( pData->szKShasai[0] == 0x00 || pData->szKShasai[0] == 0x20 ){
+        sprintf( g_szDtlMsg, "[店番=%s CIFNO=%s]公社債投信MMFの設定がありません。",
+                 h_BranchNo, h_CIF );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+    memset( h_KShasai, '\0', sizeof(h_KShasai) );
+    strncpy( h_KShasai, pData->szKShasai, sizeof(pData->szKShasai) );
+
+    /* 日中連絡先 値なし許可 */
+    memset( h_NRenTel, '\0', sizeof(h_NRenTel) );
+    hi_NRenTel = ORA_NULL;
+    if( pData->szNRenTel[0] != 0x00 && pData->szNRenTel[0] != 0x20 ){
+        strncpy( h_NRenTel, pData->szNRenTel, sizeof(pData->szNRenTel) );
+        hi_NRenTel = ORA_NOT_NULL;
+    }
+
+    /* 日中連絡先備考 値なし許可 */
+    memset( &h_NRenRemark, '\0', sizeof(h_NRenRemark) );
+    h_NRenRemark.len = 0;
+    hi_NRenRemark = ORA_NULL;
+    if( pData->szNRenRemark[0] != 0x00 && pData->szNRenRemark[0] != 0x20 ){
+        strncpy( h_NRenRemark.arr, pData->szNRenRemark, sizeof(pData->szNRenRemark) );
+        h_NRenRemark.len = (unsigned int)strlen(h_NRenRemark.arr);
+        hi_NRenRemark = ORA_NOT_NULL;
+    }
+
+    return NORMAL;
+}
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*          int insertTables( char *g_szDtlMsg )                             */
+/* Made by:                                                                  */
+/* Description : テーブルの登録                                              */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* g_szDtlMsg      char*         I                                           */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL       : 正常終了                                                */
+/*    ERROR        : 挿入エラー                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int insertTables( char *g_szDtlMsg )
+{
+
+    /* --------------------------------- */
+    /* TF_顧客プロファイルテーブルの登録 */
+    /* --------------------------------- */
+	G_POSITION = __LINE__;
+    EXEC SQL INSERT INTO TF_顧客プロファイル
+       (   店番,                                   /* 店番                   */
+           CIFNO,                                  /* CIFNO                  */
+           登録日,                                 /* 登録日                 */
+           借入適正状況,                           /* 借入適正状況           */
+           職業コード,                             /* 職業コード             */
+           職業備考,                               /* 職業備考               */
+           年収コード,                             /* 年収コード             */
+           金融資産コード,                         /* 金融資産コード         */
+           運用方針コード,                         /* 運用方針コード         */
+           取引動機コード,                         /* 取引動機コード         */
+           仕組預金,                               /* 仕組預金               */
+           外貨預金,                               /* 外貨預金               */
+           円建定額年金保険,                       /* 円建定額年金保険       */
+           円建変額年金保険,                       /* 円建変額年金保険       */
+           外貨建年金保険,                         /* 外貨建年金保険         */
+           株式投信,                               /* 株式投信               */
+           信用先物ワラント,                       /* 信用先物ワラント       */
+           外国証券投信MMF,                        /* 外国証券投信MMF        */
+           転換社債,                               /* 転換社債               */
+           公社債投信MMF,                          /* 公社債投信MMF          */
+           日中連絡先,                             /* 日中連絡先             */
+           日中連絡先備考                          /* 日中連絡先備考         */
+        )  VALUES (
+           :h_BranchNo,
+           :h_CIF,
+           :h_SetDate,
+           :h_Tekisei,
+           :h_ShokuCode,
+           :h_ShokuRemark :hi_ShokuRemark,
+           :h_IncomeCode,
+           :h_AssetsCode,
+           :h_FundsPlanCode,
+           :h_MotifCode,
+           :h_Setup,
+           :h_Gaika,
+           :h_TNenkin,
+           :h_HNenkin,
+           :h_GaikaNenkin,
+           :h_Stock,
+           :h_Shinyo,
+           :h_GaiMMF,
+           :h_TShasai,
+           :h_KShasai,
+           :h_NRenTel :hi_NRenTel,
+           :h_NRenRemark :hi_NRenRemark
+       );
+
+    /* エラーチェック */ 
+    if (sqlca.sqlcode != 0){
+        sprintf( g_szDtlMsg, 
+                 "顧客プロファイルテーブルの登録に失敗しました。(sqlca.sqlcode=%d)",
+                 sqlca.sqlcode );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+		send_err ( m$sql_statment, sqlca.sqlcode, "INSERT TF_顧客プロファイル", NULL, NULL, G_STATION);
+        return ERROR;
+    }
+
+    return NORMAL;
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*          int updateTables( g_szDtlMsg )                                   */
+/* Made by:                                                                  */
+/* Description : テーブルの更新                                              */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* g_szDtlMsg      char*         I                                           */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL       : 正常終了                                                */
+/*    ERROR        : 更新エラー                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int updateTables( char *g_szDtlMsg )
+{
+
+    /* TF_顧客プロファイルテーブルの更新 */
+	G_POSITION = __LINE__;
+    EXEC SQL UPDATE TF_顧客プロファイル 
+        SET
+             店番 = :h_BranchNo,                   /* 店番                   */ 
+             登録日 = :h_SetDate,                  /* 登録日                 */
+             借入適正状況 = :h_Tekisei,            /* 借入適正状況           */
+             職業コード = :h_ShokuCode,            /* 職業コード             */
+             職業備考 = :h_ShokuRemark :hi_ShokuRemark, /* 職業備考          */
+             年収コード = :h_IncomeCode,           /* 年収コード             */
+             金融資産コード = :h_AssetsCode,       /* 金融資産コード         */
+             運用方針コード = :h_FundsPlanCode,    /* 運用方針コード         */
+             取引動機コード = :h_MotifCode,        /* 取引動機コード         */
+             仕組預金 = :h_Setup,                  /* 仕組預金               */
+             外貨預金 = :h_Gaika,                  /* 外貨預金               */
+             円建定額年金保険 = :h_TNenkin,        /* 円建定額年金保険       */
+             円建変額年金保険 = :h_HNenkin,        /* 円建変額年金保険       */
+             外貨建年金保険 = :h_GaikaNenkin,      /* 外貨建年金保険         */
+             株式投信 = :h_Stock,                  /* 株式投信               */
+             信用先物ワラント = :h_Shinyo,         /* 信用先物ワラント       */
+             外国証券投信MMF = :h_GaiMMF,          /* 外貨証券投信MMF        */
+             転換社債 = :h_TShasai,                /* 転換社債               */
+             公社債投信MMF = :h_KShasai,           /* 公社債投信MMF          */
+             日中連絡先 = :h_NRenTel :hi_NRenTel,  /* 日中連絡先             */
+             日中連絡先備考 = :h_NRenRemark :hi_NRenRemark /* 日中連絡先備考 */
+        WHERE 
+             CIFNO = :h_CIF;
+
+    if (sqlca.sqlcode != 0){
+        sprintf( g_szDtlMsg, 
+                 "TF_顧客プロファイルテーブルの更新に失敗しました。(sqlca.sqlcode=%d)",
+                 sqlca.sqlcode );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+		send_err ( m$sql_statment, sqlca.sqlcode, "UPDATE TF_顧客プロファイル", NULL, NULL, G_STATION);
+        return ERROR;
+    }
+
+    return NORMAL;
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*          int deleteTables( g_szDtlMsg )                                   */
+/* Made by:                                                                  */
+/* Description : テーブルの削除                                              */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* g_szDtlMsg      char*         I                                           */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL       : 正常終了                                                */
+/*    ERROR        : 削除エラー                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int deleteTables( char *g_szDtlMsg )
+{
+
+    /* TF_顧客プロファイルテーブルの削除 */
+    EXEC SQL DELETE FROM TF_顧客プロファイル 
+        WHERE 
+               CIFNO = :h_CIF;
+    if (sqlca.sqlcode != 0){
+        sprintf( g_szDtlMsg, 
+                 "TF_顧客プロファイルテーブルの削除に失敗しました。(sqlca.sqlcode=%d)",
+                 sqlca.sqlcode );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+		send_err ( m$sql_statment, sqlca.sqlcode, "DELETE TF_顧客プロファイル", NULL, NULL, G_STATION);
+        return ERROR;
+    }
+
+    return NORMAL;
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*     putAcctLogFile(int tp, RECV_FILE_DATA *pData, COUNT *dCount, int rc,  */
+/*                                                        char *g_szDtlMsg ) */
+/* Made by:                                                                  */
+/* Description : ログファイル出力                                            */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* tp                int         I    ログタイプ識別                         */
+/* RECV_FILE_DATA    *pData      I    更新対象レコード情報を格納している     */
+/* COUNT             *dCount     I    処理件数を格納している                 */
+/* rc                int         I    処理結果を格納している                 */
+/* g_szDtlMsg        char*       I                                           */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL: 正常                                                           */
+/*    ERROR : ファイルアクセスエラー                                         */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int putAcctLogFile(int tp, RECV_FILE_DATA *pData, COUNT *dCount, int rc,
+                          char *g_szDtlMsg )
+{
+    AP_D_BTLOG log;
+    char    szTime[EMB_C_DTIME_LEN + 1];
+    time_t  t = time( NULL );
+
+    /* バッファ初期化 */
+    memset( &log, ' ', sizeof(log));
+    log.szDelimit[0] = 0x0a;
+    log.szDelimit1[0] = 0x0a;
+
+    if (tp == L_WRITE_END){
+        sprintf( log.szNote, 
+                 "[ RECORD COUNT:%d <OK>:%d (INS:%d UPD:%d DEL:%d ) <NG>:%d ]",
+                 dCount->iRecNum,                    /* 処理件数             */
+                 dCount->iOkNum,                     /* 正常終了             */
+                 dCount->iInsNum,                    /* 正常終了（新規登録） */
+                 dCount->iUpdNum,                    /* 正常終了（更新）     */
+                 dCount->iDelNum,                    /* 正常終了（削除）     */
+                 dCount->iNgNum );					 /* ERROR終了            */
+
+        /* 処理結果ファイルへの書き込み */
+        if ( fwrite( &log, sizeof(AP_D_BTLOG) - sizeof(log.szNote1) - sizeof(log.szDelimit1),
+                     1, g_pfLogFile ) != 1 ) {
+            send_err ( m$file_write, errno, g_szLogFile, log , NULL, G_STATION);
+            return ERROR;
+        }
+
+		sprintf ( g_szDtlMsg,
+				"[ RECORD COUNT:%d <OK>:%d (INS:%d UPD:%d DEL:%d ) <NG>:%d ]",
+                 dCount->iRecNum,                    /* 処理件数             */
+                 dCount->iOkNum,                     /* 正常終了             */
+                 dCount->iInsNum,                    /* 正常終了（新規登録） */
+                 dCount->iUpdNum,                    /* 正常終了（更新）     */
+                 dCount->iDelNum,                    /* 正常終了（削除）     */
+                 dCount->iNgNum );					 /* ERROR終了            */
+
+		send_err (  m$message1, NORMAL, g_szDtlMsg, NULL , NULL, G_STATION);
+
+    }else{
+        /* 現状NORMAL正常時は処理しない。（以下に処理だけは残しておく）*/
+        if ( rc == NORMAL ) return NORMAL;
+
+        /* リターンコード編集 */
+        switch( rc ) {
+            case NORMAL:
+                memcpy( log.szRtInfo, "NORMAL",       6); /* 正常終了                  */
+                break;
+            case ERROR:
+                memcpy( log.szRtInfo, "ERROR",        5); /* エラー                   */
+                break;
+            default:
+                memcpy( log.szRtInfo, "NONE",         4); /* その他                    */
+                break;
+        }
+
+        if (rc != NORMAL){
+            memcpy( log.szRtType, " NG ", 4); /* エラー表示    */
+        }
+        else{
+            memcpy( log.szRtType, " OK ", 4); /* 正常終了表示  */
+        }
+        /* 日時 */
+        strftime( szTime, EMB_C_DTIME_LEN + 1, "%Y-%m-%d %H:%M:%S", localtime( &t ));
+        memcpy( log.szDateTime,szTime, EMB_C_DTIME_LEN );
+
+        /* 備考(顧客プロファイルの処理データ表示） */
+        sprintf( log.szNote, "[ DATA ]%.*s,%.*s,%.*s,%.*s",
+             sizeof(pData->szRecordId), pData->szRecordId,
+             sizeof(pData->szBranchNo), pData->szBranchNo,
+             sizeof(pData->szCIF), pData->szCIF,
+             sizeof(pData->szSetDate), pData->szSetDate
+        );
+
+        /* 事象発生詳細レコード番号、事象詳細文字列 */
+        sprintf( log.szNote1, "(%d) %.*s", dCount->iRecNum,
+                                           (unsigned int)strlen(g_szDtlMsg), g_szDtlMsg );
+
+        /* 処理結果ログファイルへの書き込み */
+        if ( fwrite( &log, sizeof(AP_D_BTLOG), 1, g_pfLogFile ) != 1 ){
+            send_err ( m$file_write, errno, g_szLogFile, log , NULL, G_STATION);
+            return ERROR;
+        }
+    }
+
+    return NORMAL;
+}
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*     commit( void )                                                        */
+/* Made by:                                                                  */
+/* Description:ＤＢのコミット                                                */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/*  g_szDtlMsg      *char         O    事象詳細文字列                        */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL : 正常                                                          */
+/*    ERROR  : コミットエラー（システムエラー）                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int commit( VOID )
+{
+
+    /* ＤＢのコミット */
+    EXEC SQL COMMIT;
+    if (sqlca.sqlcode < 0) {
+        sprintf(g_szDtlMsg,
+                "ＤＢのコミットに失敗しました。(CODE=%ld)",
+                sqlca.sqlcode);
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+
+
+    return NORMAL;
+}
+
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*     rollback( void )                                                      */
+/* Made by:                                                                  */
+/* Description:ＤＢのロールバック                                            */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL : 正常                                                          */
+/*    ERROR  : ロールバックエラー（システムエラー）                          */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int rollback( )
+{
+    
+	/* ＤＢのロールバック */
+    EXEC SQL ROLLBACK WORK;
+    if (sqlca.sqlcode < 0) {
+        sprintf(g_szDtlMsg,
+                "ＤＢのロールバックに失敗しました。(CODE=%ld)",
+                sqlca.sqlcode);
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+
+    return NORMAL;
+}
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*     finalize( int rc, int iRecNum, int iOkNum )                           */
+/* Made by:                                                                  */
+/* Description:終了処理                                                      */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* rc              int           i   リターンコード                          */
+/* iRecNum         int           i   入力件数                                */
+/* iOkNum          int           i   成功件数                                */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static void finalize( int rc, int iRecNum, int iOkNum )
+{
+
+    /* ファイルのクローズ */
+	if ( file_open_flag1 == 1 ) {
+		fclose( g_pfRecvFile );
+	}
+	if ( file_open_flag2 == 1 ) {
+		fclose( g_pfLogFile );
+	}
+
+    /* ＤＢ接続解除 */
+/*
+    EXEC SQL CONNECT RESET;
+    if ( sqlca.sqlcode != 0 ){
+        send_err( LOG_C_TYPERR, 
+            "ＤＢ接続の解除が失敗しました。(sqlca.sqlcode=%d)", sqlca.sqlcode );
+    }
+
+    send_err( LOG_C_TYPINF,
+                       "プロセス(profile_u)を終了します。(終了コード=%d 処理件数=%d/%d)",
+                       rc, iOkNum, iRecNum );
+*/
+
+    exit( rc );
+}
+
+
+
+void dump(i_buf,size,name)
+char *i_buf;
+int size;
+char *name;
+{
+    char o_buf[1024];
+
+    memset(o_buf,0x00,sizeof(o_buf));
+    memcpy(o_buf,i_buf,size);
+
+    printf("%s=[%s]\n",name,o_buf);
+
+}

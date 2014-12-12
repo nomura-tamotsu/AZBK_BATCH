@@ -1,0 +1,3300 @@
+/*==========================================================================*/
+/* Copyright　Information Services International-Dentsu, Ltd.   　          */
+/*==========================================================================*/
+/*                                                                          */
+/* SYSTEM           : BANK・R－CC                                           */
+/*                                                                          */
+/* PROGRAM NAME     : コンタクト履歴抽出                                    */
+/*                                                                          */
+/* MODULE NAME      : ContactHistoryrExport                                 */
+/*                                                                          */
+/* FUNCTION         : コンタクト履歴抽出処理を行う                          */
+/*                                                                          */
+/*                                                                          */
+/* CALLING MODULE   : Main Module.                                          */
+/*                                                                          */
+/* CALLED MODULE    : send_err, errhandler, db_connect                      */
+/*                                                                          */
+/* ENTRY POint      : Main Module.                                          */
+/*                                                                          */
+/* INPUT            : argv[1]・・処理モード(1:通常 2:障害時)                */
+/*                  : argv[2]・・コンタクト履歴ファイル(ﾌﾙﾊﾟｽ)              */
+/*                    argv[3]・・抽出開始日(モード2の時のみ指定)            */
+/*                    argv[4]・・抽出終了日(モード2の時のみ指定)            */
+/*                                                                          */
+/*                                                                          */
+/* EXIT             : 正常終了       ・・・NORMAL(0)                        */
+/*                    異常終了       ・・・ERROR (9)                        */
+/*                                                                          */
+/****************************************************************************/
+/* Control Flow                                                             */
+/*                                                                          */
+/* main                                                                     */
+/*  |-Initialize ------------------ 初期処理                                */
+/*  |-makeUpdateHistory ----------- 更新履歴抽出                            */
+/*  |  |-makeServiceLog -----------   |-更新サービスログ抽出                */
+/*  |  |  |-makeSendFile ----------   |   |-送信ファイル作成                */
+/*  |  |     |-setCustomerNo ------   |       |-顧客管理番号設定            */
+/*  |  |     |-setCampaignName ----   |       |-キャンペーン名設定          */
+/*  |  |     |-setKosho -----------   |       |-交渉相手設定                */
+/*  |  |     |-setService ---------   |       |-サービス種別名設定          */
+/*  |  |     |-setIppanTokki ------   |       |-一般履歴特記事項設定        */
+/*  |  |     |-setSalesTokki ------   |       |-セールス履歴特記事項設定    */
+/*  |  |     |-setClaim -----------   |       |-クレーム設定                */
+/*  |  |     |-setInbMeisaiName ---   |       |-インバウンド会話明細名設定  */
+/*  |  |     |-getMeisaiName ------   |       |-会話項目明細名取得          */
+/*  |  |-makeGeneralLog -----------   |-更新一般履歴抽出                    */
+/*  |  |  |-makeSendFile ----------   |   |-送信ファイル作成                */
+/*  |  |-makeSalesLog -------------   |-更新セールス履歴抽出                */
+/*  |  |  |-makeSendFile ----------   |   |-送信ファイル作成                */
+/*  |  |-makeClaimLog -------------   |-更新クレーム履歴抽出                */
+/*  |  |  |-makeSendFile ----------   |   |-送信ファイル作成                */
+/*  |-makeNewHistory -------------- 新規履歴抽出                            */
+/*  |  |-makeSendFile -------------   |-送信ファイル作成                    */
+/*  |-finalize -------------------- 終了処理                                */
+/*                                                                          */
+/* Mod   yy/mm/dd   Coder           Comment                                 */
+/*-----+----------+-------------+-------------------------------------------*/
+/* %00 | 14/04/25 | ISID        | First Edition.                            */
+/* %01 | 14/06/04 | ISID        | 一般履歴1000バイト対応                    */
+/* %02 | 14/07/04 | ISID        | 改行コード(0d0a 対応 )                    */
+/* %03 | 14/07/09 | ISID        | 特記事項全半角混在対応                    */
+/* %04 | 14/07/10 | ISID        | キャンペーン名をTRIM                      */
+/* %05 | 14/07/18 | ISID        | 外部データの場合のキャンペーン名不具合    */
+/* %06 | 14/09/03 | ISID        | 顧客管理番号の採番方法修正                */
+/* %07 | 14/09/05 | ISID        | 顧客管理番号の採番方法修正2               */
+/*                              |   画面での外部データ取り込みの対応        */
+/*==========================================================================*/
+/*---------------------------------------------------------------------------*/
+/* Standard include specification                                            */
+/*---------------------------------------------------------------------------*/
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <ctype.h>
+#include <errno.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <time.h>
+#include <mbstring.h>
+
+
+
+/*---------------------------------------------------------------------------*/
+/* User defined include specification                                        */
+/*---------------------------------------------------------------------------*/
+#include "msg.h"
+#include "common.h"
+#include "batchcommon.h"
+#include "apl_common.h"
+
+EXEC SQL INCLUDE mbproc.h;
+
+/*---------------------------------------------------------------------------*/
+/* Internal macro definition                                                 */
+/*---------------------------------------------------------------------------*/
+
+
+/*---------------------------------------------------------------------------*/
+/* User Local defined  specification                                         */
+/*---------------------------------------------------------------------------*/
+#define L_WRITE_END                     1
+#define L_WRITE_LOG                     0
+
+/* キャンペーンID */
+#define CONTACT_LOG_S_INB               "0000"      /* インバウンド          */
+
+/* 種類 */
+#define CONTACT_LOG_S_TYPE_TB           "01"        /* 取引                  */
+#define CONTACT_LOG_S_TYPE_SL           "04"        /* セールス              */
+#define CONTACT_LOG_S_TYPE_CL           "06"        /* クレーム              */
+#define CONTACT_LOG_S_TYPE_IP           "07"        /* 一般                  */
+#define CONTACT_LOG_S_TYPE_EI           "10"        /* 営業店コンタクト履歴  */
+
+/* 外部データ区分 */
+#define CONTACT_LOG_S_HP                "5"         /* HP請求                */
+#define CONTACT_LOG_S_NU                "7"         /* 自動音声              */
+#define CONTACT_LOG_S_MO                "0"         /* 目論見履歴            */
+#define CONTACT_LOG_S_OT                "1"         /* その他請求            */
+#define CONTACT_LOG_S_IK                "2"         /* IB店開設              */
+#define CONTACT_LOG_S_IM                "3"         /* IB申込                */
+#define CONTACT_LOG_S_HD                "4"         /* 本部DM                */
+#define CONTACT_LOG_S_HK                "6"         /* HP開設                */
+#define CONTACT_LOG_S_BD                "8"         /* 部店DM                */
+#define CONTACT_LOG_S_AL                "9"         /* 一括取込              */
+
+/* 連携項目  キャンペーン名 */
+#define CONTACT_LOG_S_IN_TB             "TB_テレバン取引"
+#define CONTACT_LOG_S_IN_HP             "HP_HP資料請求"
+#define CONTACT_LOG_S_IN_NU             "NU_NU資料請求"
+#define CONTACT_LOG_S_IN_TM             "IN_TMインバウンド"
+#define CONTACT_LOG_S_OUT               "OUT_"
+
+/* 会話項目ID */
+#define CONTACT_LOG_S_KOSHO             "0001"      /* 交渉相手              */
+#define CONTACT_LOG_S_CALL              "0002"      /* コール状況            */
+#define CONTACT_LOG_S_CALLD             "0003"      /* コール結果            */
+
+/* 会話明細ID コール状況 */
+#define CONTACT_LOG_S_CALL_CON          "0001"      /* コンタクト            */
+
+/* 処理区分 */
+#define ATTRIBUTE_S_NON                 1           /* 期間指定なし          */
+#define ATTRIBUTE_S_START               2           /* 開始日指定            */
+#define ATTRIBUTE_S_END                 3           /* 終了日指定            */
+
+
+/*---------------------------------------------------------------------------*/
+/* Global variable specification                                             */
+/*---------------------------------------------------------------------------*/
+/* 設定ファイル項目（ホスト変数以外）*/                                               
+char g_szSendFile       [AP_CONFIG_LINE];		 /* 送信ファイル             */
+int  g_szSyoriType;                              /* 処理区分                 */
+char g_szStartDate[12];                          /* 開始日                   */
+char g_szEndDate[12];                            /* 終了日                   */
+
+double g_szCtrlFileCount;                        /* 制御ファイルディレクトリ */
+char g_szCtrlFileName   [AP_CONFIG_LINE]; /* 制御ファイル名           */
+
+char g_SendRec          [1024];                  /* 送信ファイル１レコード   */
+
+FILE *g_pfSendFile;
+
+char g_szDtlMsg           [AP_C_NOTE_LEN_H];         /* 事象詳細文字列       */
+
+char    process_name[43];
+char    g_work[1024];
+int		g_mode;										/* 処理モード 1:通常運用 2:障害時運用 */
+		
+char g_StartDate[9];								/* 開始日                */
+char g_EndDate[9];									/* 終了日                */
+
+int file_open_flag  = 0;							/* ファイルオープンフラグ */
+int cusor_open_flag = 0;							/* カーソルオープンフラグ */
+
+char g_szSystemDate[22];                              /* システム日付         */
+char g_szSystemDateBuf[22];                           /* システム日付         */
+
+typedef struct _COUNT {
+    int  iRecNum;                                    /* 処理件数             */
+    int  iOkNum ;                                    /* 正常終了             */
+    int  iInsNum;                                    /* 正常終了（新規登録） */
+    int  iUpdNum;                                    /* 正常終了（更新）     */
+    int  iDelNum;                                    /* 正常終了（削除）     */
+    int  iNgNum ;                                    /* ERROR終了            */
+} COUNT;
+
+COUNT    dCount;
+
+unsigned char	comment_buf[1135];					 /* コメント用バッファ %03 */
+unsigned char	out_comment_buf[1135];				 /* 出力用コメントバッファ %03 */
+unsigned char	tmp_buf[1135];						 /* 出力用バッファ %03 */
+
+/*---------------------------------------------------------------------------*/
+/* Host Variable                                                             */
+/*---------------------------------------------------------------------------*/
+EXEC SQL INCLUDE SQLCA;
+EXEC SQL BEGIN DECLARE SECTION;
+    /* ＤＢ接続情報 */
+    char sqlcmd[2048];
+
+/* TH_コンタクト履歴 */
+    char  h_ContactID[23];                           /* コンタクトID         */
+    short hi_ContactID;
+    char  h_CallTimestamp[23];                       /* コール日時           */
+    short hi_CallTimestamp;
+    char  h_CampaignID[5];                           /* キャンペーンID       */
+    short hi_CampaignID;
+    char  h_CampaignName[17];                        /* キャンペーン略称     */
+    short hi_CampaignName;
+    char  h_CallStatus[5];                           /* コール状況           */
+    short hi_CallStatus;
+    char  h_UserID[9];                               /* 受付ユーザID         */
+    short hi_UserID;
+
+/* TM_ユーザ */
+    char  h_UserShortName[11];                       /* ユーザ略称           */
+    short hi_UserShortName;
+
+/* TH_サービスログ */
+    char  h_EdaNo[6];                                /* 枝番                 */
+    short hi_EdaNo;
+    long  h_lEdaNo;                                  /* 枝番                 */
+    short hi_lEdaNo;
+    char  h_CIFNO[11];                               /* CIFNO                */
+    short hi_CIFNO;
+    char  h_TradeTarget[5];                          /* 交渉相手             */
+    short hi_TradeTarget;
+    char  h_Type[3];                                 /* 種類                 */
+    short hi_Type;
+    char  h_ServiceType[5];                          /* サービス種別ID       */
+    short hi_ServiceType;
+    char  h_Shohin[11];                              /* 商品ID               */
+    short hi_Shohin;
+    char  h_ResponseMedia[5];                        /* レスポンスメディア   */
+    short hi_ResponseMedia;
+    char  h_ExternalType[2];                         /* 外部データ区分       */
+    short hi_ExternalType;
+
+/* TH_一般履歴 */
+    varchar          h_Comment1[1001];				/* コメント1 %01         */
+    short hi_Comment1;
+    varchar          h_Comment2[133];				/* コメント2             */
+    short hi_Comment2;
+
+/* TH_クレーム履歴 */
+    varchar          h_Claim1[103];				     /* クレーム内容1        */
+    short hi_Claim1;
+    varchar          h_Claim2[103];				     /* クレーム内容2        */
+    short hi_Claim2;
+    varchar          h_Claim3[103];				     /* クレーム内容3        */
+    short hi_Claim3;
+    varchar          h_Claim4[103];				     /* クレーム内容4        */
+    short hi_Claim4;
+
+/* TM_会話項目 */
+    char  h_SalesColumnName[25];                     /* セールス履歴カラム名 */
+    short hi_SalesColumnName;
+    char  h_IppanColumnName[25];                     /* 一般履歴カラム名     */
+    short hi_IppanColumnName;
+
+/* TM_会話明細 */
+    char  h_KomokuID[5];                             /* 会話項目ID           */
+    short hi_KomokuID;
+    char  h_MeisaiID[5];                             /* 会話明細ID           */
+    short hi_MeisaiID;
+    varchar          h_KaiwaD[31];
+    short hi_KaiwaD;
+
+/* TM_サービス種別 */
+    varchar          h_ServiceName[49];				/* サービス種別名       */
+    short hi_ServiceName;
+
+
+
+/* ワークホスト変数 */
+    struct{ short len; char arr[20]; }
+          h_sFROM_DATE;                              /* FROM                 */
+    struct{ short len; char arr[20]; }
+          h_sTO_DATE;                                /* TO                   */
+    struct{ short len; char arr[20]; }
+          h_FROM_DATE;                               /* FROM                 */
+    struct{ short len; char arr[20]; }
+          h_TO_DATE;                                 /* TO                   */
+
+    char  hw_ResponseMediaID[5];                     /* レスポンスメディアID */
+    char  hw_Shohin1ID[5];                           /* 問合せ商品1ID        */
+
+    long h_DATA_COUNT;                             /* セールス履歴レコード数 */
+
+	char h_FROM_TS               [ 27];         /* 対象抽出用タイムスタンプ  */
+	char h_TO_TS                 [ 27];         /* 対象抽出用タイムスタンプ  */
+	char h_process_id             [ 5];				/* 処理ID                */
+
+
+
+EXEC SQL END DECLARE SECTION;
+
+/*---------------------------------------------------------------------------*/
+/* External function prototype                                               */
+/*---------------------------------------------------------------------------*/
+
+/*---------------------------------------------------------------------------*/
+/* Internal function prototype                                               */
+/*---------------------------------------------------------------------------*/
+extern int send_err();
+extern void errhandler();
+extern int db_connect();
+void rtrim();
+
+static int  get_previous_date ( const char *process_id );
+static int  update_previous_date ( const char *process_id );
+static void makeExtractionMessage ( char *from , char *to );
+static void editDate ( int mode, char *src, char *dest );
+
+static void initialize( int ac, char *av[] );
+static int  makeUpdateHistory( );
+static int  makeServiceLog();
+static int  getUser( );
+static int  makeSendFile();
+static int  setCustomerNo();
+static int  setCampaignName( );
+static int  setKosho( );
+static int  getMeisaiName( );
+static int  setService( );
+static int  setIppanTokki( );
+static int  setSalesTokki( );
+static int  setClaim( );
+static int  setInbMeisaiName( char *pKomokuID );
+static int  getMeisaiFromColumn( );
+
+static int  makeGeneralLog();
+static int  makeSalesLog();
+
+static int  makeNewHistory();
+static int  makeClaimLog();
+static int  commit( );
+static int  rollback( void );
+
+static void finalize( int rc );
+
+static int  comment_edit ( char *in_buf , char *out_buf );
+static int  tab_to_space (  char *buf );
+static void out_edit ( char *i_buf, char *o_buf ,int mode, int size );
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   int main( int argc, char *argv[] )                                      */
+/*                                                                           */
+/* Made by:                                                                  */
+/* Description:                                                              */
+/*      メイン処理                                                           */
+/*                                                                           */
+/* Arguments:                                                                */
+/* Type     Name              I/O    Content                                 */
+/* -------- ----------------- --- ------------------------------------------ */
+/*    int    argc              I  引数の数                                   */
+/*    char  *argv[]   argv[1]  I  処理モード(1:通常 2:障害時)                */
+/*                    argv[2]  I  コンタクト履歴ファイル(ﾌﾙﾊﾟｽ)              */
+/*                    argv[3]  I  抽出開始日(モード2の時のみ指定)            */
+/*                    argv[4]  I  抽出終了日(モード2の時のみ指定)            */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+int main( int argc, char *argv[] )
+{
+    int  rc;
+
+	/*-----------------------------*/
+    /* Print process start message */
+    /*-----------------------------*/
+
+    strcpy( G_STATION, "ContactHistoryrExport" );
+	
+	memset(process_name,0x00,sizeof(process_name));
+    strcpy(process_name,"コンタクト履歴抽出");
+
+    send_err( m$start_process, NORMAL, process_name, "", "", G_STATION );
+
+    /*-------------------------------------------------------*/
+    /* Setup error handler routine                           */
+    /*-------------------------------------------------------*/
+    EXEC SQL WHENEVER SQLERROR DO errhandler();
+
+    G_POSITION = __LINE__;
+    rc = db_connect() ;
+    if ( rc != NORMAL ) {
+        send_err( m$db_connect, rc, "", "", "", G_STATION );
+        rc = ERROR;
+        goto ENDPROC ;
+    }
+
+    /* ---------- */
+    /* 初期化処理 */
+    /* ---------- */
+    initialize( argc, argv );
+ 
+	memset ( &dCount, 0x0, sizeof(dCount));
+
+    /* 更新履歴の抽出 */
+    rc = makeUpdateHistory();
+    if ( rc != 0 ) {
+        goto ENDPROC;
+    }
+
+
+    /* 新規登録履歴の抽出 */
+    rc = makeNewHistory();
+    if ( rc != 0 ) {
+        goto ENDPROC;
+    }
+
+	if ( rc == NORMAL ){
+        dCount.iOkNum = dCount.iRecNum;
+    }
+	 
+	if( rc == NORMAL ) {
+		if ( dCount.iRecNum == 0 ){
+			sprintf ( g_szDtlMsg, "コンタクト履歴ファイル(%s)は０件ファイルです。", g_szSendFile );
+		}
+		else {
+			sprintf ( g_szDtlMsg, "コンタクト履歴ファイル(%s) %d 件のデータを抽出しました。", g_szSendFile ,dCount.iRecNum );
+		}
+		send_err (m$message1, NORMAL, g_szDtlMsg, NULL, NULL, G_STATION);
+    }
+	
+	/* 次回抽出条件更新 (通常時のみ更新)*/
+	if ( g_mode == USUALITY &&  rc == NORMAL ) {
+		rc = update_previous_date ( "LCU" );
+		if ( rc == NORMAL ) {
+			/* ＤＢのコミット */
+			rc = commit();
+		}
+		else{
+			rollback();
+		}
+	}
+
+
+ENDPROC:	
+	if ( rc == NORMAL ) {
+        send_err( m$stop_process, NORMAL, process_name, "", "", G_STATION );
+    } else {
+        send_err( m$abend_process, ERROR, process_name, "", "", G_STATION );
+    }
+
+	finalize( rc );
+
+}
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   void initialize( int ac, char *av[] )                                   */
+/*                                                                           */
+/* Made by:                                                                  */
+/* Description:                                                              */
+/*      初期化処理                                                           */
+/*                                                                           */
+/* Arguments:                                                                */
+/* Type     Name              I/O    Content                                 */
+/* -------- ----------------- --- ------------------------------------------ */
+/*    int    argc              I  引数の数                                   */
+/*    char  *argv[]   argv[1]  I  処理モード(1:通常 2:障害時)                */
+/*                    argv[2]  I  コンタクト履歴ファイル(ﾌﾙﾊﾟｽ)              */
+/*                    argv[3]  I  抽出開始日(モード2の時のみ指定)            */
+/*                    argv[4]  I  抽出終了日(モード2の時のみ指定)            */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*                                                                           */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static void initialize( int ac, char *av[] )
+{
+     time_t t = time( NULL );
+
+	int exit_code=NORMAL;
+	int rc;
+
+    /* レスポンスメディアのセット */
+    memset( hw_ResponseMediaID, '\0', sizeof( hw_ResponseMediaID ));
+	strcpy( hw_ResponseMediaID,"0026");
+
+
+    /* 問合せ商品1の取得 */
+    memset( hw_Shohin1ID, '\0', sizeof( hw_Shohin1ID ));
+	strcpy( hw_Shohin1ID,"0041");
+
+	/* システム日付を取得する */
+	strftime( g_szSystemDate, sizeof( g_szSystemDate ), "%Y%m%d %H%M%S", localtime( &t ));
+    strcpy( g_szSystemDateBuf, g_szSystemDate );
+
+
+	/* 引数処理 */
+	if ( ac >= 2 ) {
+		if ( !strcmp ( av[1] , "1" )) { /* 通常 */
+			g_mode = USUALITY;
+		}
+		else if ( !strcmp ( av[1] , "2" )) { /* 障害時 */
+			g_mode = OBSTACLE;
+		}
+		else {
+			sprintf (g_szDtlMsg,"第1引数:処理モードは、1 または 2を指定して下さい(1:通常 2:障害時)");
+			send_err (m$invalid_parameter, ERROR, g_szDtlMsg, NULL, NULL, G_STATION);
+			exit_code = ERROR;
+			goto initialize_end;
+		}
+	}
+	else {
+		sprintf (g_szDtlMsg,"処理モード(1:通常 2:障害時) 抽出ファイル名 [抽出開始日 抽出終了日]");
+		send_err (m$invalid_parameter, ERROR, g_szDtlMsg, NULL, NULL, G_STATION);
+		exit_code = ERROR;
+		goto initialize_end;
+	}
+
+	switch ( g_mode ) {
+		case USUALITY: /* 通常 */
+			if ( ac == 3 ) {
+				strcpy ( g_szSendFile, av[2] );
+			}
+			else {
+				sprintf (g_szDtlMsg,"処理モード(1:通常) 抽出ファイル名");
+				send_err (m$invalid_parameter, ERROR, g_szDtlMsg, NULL, NULL, G_STATION);
+				exit_code = ERROR;
+				goto initialize_end;
+			}
+
+			break;
+
+		case OBSTACLE:/* 障害時 */
+			if ( ac == 5 ) {
+				strcpy ( g_szSendFile, av[2] );
+				if ( strlen(av[3]) > 8 || strlen(av[4]) > 8 ) {
+					sprintf (g_szDtlMsg,"抽出開始日 または 抽出終了日のレングスが長すぎます(YYYYMMDD)");
+					send_err (m$invalid_parameter, ERROR, g_szDtlMsg, NULL, NULL, G_STATION);
+					exit_code = ERROR;
+					goto initialize_end;
+				}
+				else {
+					strcpy ( g_StartDate,  av[3] );
+					strcpy ( g_EndDate,    av[4] );
+				}
+
+
+			}
+			else {
+				sprintf (g_szDtlMsg,"処理モード(2:障害時) 抽出ファイル名 抽出開始日 抽出終了日");
+				send_err (m$invalid_parameter, ERROR, g_szDtlMsg, NULL, NULL, G_STATION);
+				exit_code = ERROR;
+				goto initialize_end;
+			}
+
+			break;
+
+		default:
+			/* 上部でエラーチェック済なので　ここのロジックは通らない */
+			/* 後のカスタマイズの為にdefaultを残しています            */
+			break;
+	}
+
+	memset ( h_FROM_TS, 0x0, sizeof(h_FROM_TS) );
+	memset ( h_TO_TS,   0x0, sizeof(h_TO_TS) );
+
+	/* 抽出条件セット (フォーマット:YYYYMMDD HH24MISS) */
+	switch ( g_mode ) {
+		case USUALITY: /* 通常 */
+			strcpy ( h_TO_TS ,   g_szSystemDate );
+			rc = get_previous_date ( "LCU" );
+			if ( rc != NORMAL ) {
+				exit_code = ERROR;
+				goto initialize_end;
+			}
+			rtrim( h_FROM_TS );
+
+			break;
+
+		case OBSTACLE:/* 障害時 */			
+			strcpy ( h_FROM_TS , g_StartDate );
+			strcat ( h_FROM_TS, " 000000" );
+
+			strcpy ( h_TO_TS ,   g_EndDate );
+			strcat ( h_TO_TS,   " 235959" );
+
+			break;    
+
+			
+		default:
+			/* 上部でエラーチェック済なので　ここのロジックは通らない */
+			/* 後のカスタマイズの為にdefaultを残しています            */
+			break;
+		
+	}
+
+    /* コンタクト履歴ファイルのオープン */
+    if(( g_pfSendFile = fopen( g_szSendFile, "w" )) == NULL ) {
+		sprintf( g_szDtlMsg, "コンタクト履歴ファイル%sのオープンに失敗しました。", g_szSendFile );
+		send_err( m$file_open, errno, g_szDtlMsg, NULL, NULL, G_STATION );
+
+		exit_code = ERROR;
+		goto initialize_end;
+
+    }
+	file_open_flag = 1;
+
+	/* 抽出条件をメッセージ出力 */
+	makeExtractionMessage ( h_FROM_TS , h_TO_TS );
+
+
+
+initialize_end:
+	if ( exit_code != NORMAL ) {
+		send_err( m$abend_process, ERROR, process_name, "", "", G_STATION );
+		exit ( exit_code );    
+	}
+
+}
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   int makeUpdateHistory( )                                                */
+/*                                                                           */
+/* Description:                                                              */
+/*   更新履歴抽出                                                            */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  --------------------------------------- */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   None                                                                    */
+/*                                                                           */
+/* Return Code:                                                              */
+/*        NORMAL         : 正常                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int makeUpdateHistory()
+{
+
+    int cnt = 0;
+    int rc;
+
+    rc = NORMAL;
+
+    /* 更新サービスログ抽出 */
+    rc = makeServiceLog();
+    if (rc != NORMAL){
+        return( rc );
+    }
+
+    /* 更新一般履歴抽出 */
+    rc = makeGeneralLog();
+    if (rc != NORMAL){
+        return( rc );
+    }
+
+
+	/* 更新セールス履歴抽出 */
+    rc = makeSalesLog();
+    if (rc != NORMAL){
+        return( rc );
+    }
+
+    /* 更新クレーム履歴作成 */
+    rc = makeClaimLog();
+    if (rc != NORMAL){
+        return( rc );
+    }
+
+
+    return( rc );
+
+}
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   int makeServiceLog( )                                                   */
+/*                                                                           */
+/* Description:                                                              */
+/*   更新サービスログ抽出                                                    */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  --------------------------------------- */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   None                                                                    */
+/*                                                                           */
+/* Return Code:                                                              */
+/*        NORMAL   : 正常                                                    */
+/*        ERROR    : 異常                                                    */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int makeServiceLog()
+{
+
+    int rc = NORMAL;
+
+	G_POSITION = __LINE__;
+    EXEC SQL DECLARE CUR_USV CURSOR FOR
+            SELECT CNT.コンタクトID,
+                   TO_char(CNT.コール日時, 'YYYY-MM-DD HH24:MI:SS'),
+                   CNT.キャンペーンID,
+                   RTRIM(CNT.キャンペーン略称),
+                   CNT.コール状況,
+                   CNT.受付ユーザID,
+                   SRV.枝番,
+                   RTRIM(SRV.CIFNO),
+                   SRV.交渉相手,
+                   SRV.種類,
+                   SRV.サービス種別ID,
+                   SRV.商品ID,
+                   SRV.レスポンスメディア,
+                   SRV.外部データ区分
+              FROM TH_コンタクト履歴 CNT , TH_サービスログ SRV  
+             WHERE CNT.コンタクトID = SRV.コンタクトID
+			   AND CNT.コール日時 > add_months(sysdate ,-24)
+               AND CNT.登録日 < TO_DATE(:h_FROM_TS,'YYYYMMDD HH24MISS')
+               AND SRV.登録日 BETWEEN TO_DATE(:h_FROM_TS,'YYYYMMDD HH24MISS') AND TO_DATE(:h_TO_TS,'YYYYMMDD HH24MISS')
+               AND SRV.移行履歴フラグ is null
+               AND LENGTH(RTRIM(SRV.CIFNO)) = 7
+               AND SRV.種類 != '04'
+               AND SRV.種類 != '06'
+               AND SRV.種類 != '07'
+               AND SRV.種類 != '10'
+               AND SRV.種類 != '02'
+               AND SRV.種類 != '03'
+               AND SRV.種類 != '11'
+               AND (SRV.外部データ区分 != '0' OR SRV.外部データ区分 IS NULL)
+          ORDER BY CNT.登録日
+           ;
+    if( sqlca.sqlcode < 0 ){
+		sprintf( g_szDtlMsg,
+				"カーソル(CUR_USV) DECLARE エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+		send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        return( ERROR );
+    }
+
+	G_POSITION = __LINE__;
+    EXEC SQL OPEN CUR_USV;
+    if( sqlca.sqlcode < 0 ){
+		sprintf( g_szDtlMsg,
+				"カーソル(CUR_USV)オープン・エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+		send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        EXEC SQL CLOSE CUR_USV;
+        return( ERROR );
+    }
+
+    while( 1 ) {
+
+        memset( h_ContactID, 0x00, sizeof(h_ContactID) );
+        hi_ContactID = ORA_NULL;
+        memset( h_CallTimestamp, 0x00, sizeof(h_CallTimestamp) );
+        hi_CallTimestamp = ORA_NULL;
+        memset( h_CampaignID, 0x00, sizeof(h_CampaignID) );
+        hi_CampaignID = ORA_NULL;
+        memset( h_CampaignName, 0x00, sizeof(h_CampaignName) );
+        hi_CampaignName = ORA_NULL;
+        memset( h_CallStatus, 0x00, sizeof(h_CallStatus) );
+        hi_CallStatus = ORA_NULL;
+        memset( h_UserID, 0x00, sizeof(h_UserID) );
+        hi_UserID = ORA_NULL;
+        h_lEdaNo = 0;
+        hi_lEdaNo = ORA_NULL;
+        memset( h_CIFNO, 0x00, sizeof(h_CIFNO) );
+        hi_CIFNO = ORA_NULL;
+        memset( h_TradeTarget, 0x00, sizeof(h_TradeTarget) );
+        hi_TradeTarget = ORA_NULL;
+        memset( h_Type, 0x00, sizeof(h_Type) );
+        hi_Type = ORA_NULL;
+        memset( h_ServiceType, 0x00, sizeof(h_ServiceType) );
+        hi_ServiceType = ORA_NULL;
+        memset( h_Shohin, 0x00, sizeof(h_Shohin) );
+        hi_Shohin = ORA_NULL;
+        memset( h_ResponseMedia, 0x00, sizeof(h_ResponseMedia) );
+        hi_ResponseMedia = ORA_NULL;
+        memset( h_ExternalType, 0x00, sizeof(h_ExternalType) );
+        hi_ExternalType = ORA_NULL;
+
+		G_POSITION = __LINE__;
+        EXEC SQL FETCH CUR_USV
+                INTO
+                    :h_ContactID :hi_ContactID,
+                    :h_CallTimestamp :hi_CallTimestamp,
+                    :h_CampaignID :hi_CampaignID,
+                    :h_CampaignName :hi_CampaignName,
+                    :h_CallStatus :hi_CallStatus,
+                    :h_UserID :hi_UserID,
+                    :h_lEdaNo :hi_lEdaNo,
+                    :h_CIFNO :hi_CIFNO,
+                    :h_TradeTarget :hi_TradeTarget,
+                    :h_Type :hi_Type,
+                    :h_ServiceType :hi_ServiceType,
+                    :h_Shohin :hi_Shohin,
+                    :h_ResponseMedia :hi_ResponseMedia,
+                    :h_ExternalType :hi_ExternalType
+                ;
+        if (sqlca.sqlcode == ORA_NOF){
+            break;
+        }
+        else if (sqlca.sqlcode < 0){
+			sprintf( g_szDtlMsg,
+				"カーソル(CUR_USV) FETCHエラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+			send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+            rc = ERROR;
+            break;
+        }
+		/*printf("h_ContactID=[%s]\n",h_ContactID);*/
+
+        /* 受付け者名取得 */
+        rc = getUser();
+        if (rc != NORMAL){
+            break;
+        }
+
+        /* コンタクト履歴ファイル作成 */
+        rc = makeSendFile();
+        if (rc != NORMAL){
+            break;
+        }
+
+
+    } /* while loop end */
+
+    EXEC SQL CLOSE CUR_USV;
+
+    return( rc );
+
+}
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   int makeGeneralLog( )                                                   */
+/*                                                                           */
+/* Description:                                                              */
+/*   更新一般履歴抽出                                                        */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  --------------------------------------- */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   None                                                                    */
+/*                                                                           */
+/* Return Code:                                                              */
+/*        NORMAL   : 正常                                                    */
+/*        ERROR    : 異常                                                    */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int makeGeneralLog()
+{
+
+    int rc = NORMAL;
+
+	G_POSITION = __LINE__;
+    EXEC SQL DECLARE CUR_UGN CURSOR FOR
+            SELECT CNT.コンタクトID,
+                   TO_CHAR(CNT.コール日時, 'YYYY-MM-DD HH24:MI:SS'),
+                   CNT.キャンペーンID,
+                   RTRIM(CNT.キャンペーン略称),
+                   CNT.コール状況,
+                   CNT.受付ユーザID,
+                   SRV.枝番,
+                   RTRIM(SRV.CIFNO),
+                   SRV.交渉相手,
+                   SRV.種類,
+                   SRV.サービス種別ID,
+                   SRV.商品ID,
+                   SRV.レスポンスメディア,
+                   SRV.外部データ区分
+              FROM TH_サービスログ SRV,
+                   TH_コンタクト履歴 CNT,
+                   TH_一般履歴 GNL 
+             WHERE SRV.コンタクトID = CNT.コンタクトID
+			   AND SRV.コンタクトID = GNL.コンタクトID
+			   AND SRV.枝番 = GNL.枝番
+			   AND CNT.コール日時 > add_months(sysdate ,-24)
+			   AND CNT.登録日 < TO_DATE(:h_FROM_TS,'YYYYMMDD HH24MISS')
+               AND SRV.移行履歴フラグ is null
+               AND LENGTH(RTRIM(SRV.CIFNO)) = 7
+               AND SRV.種類 = '07'
+			   AND GNL.登録日 BETWEEN TO_DATE(:h_FROM_TS,'YYYYMMDD HH24MISS') AND TO_DATE(:h_TO_TS,'YYYYMMDD HH24MISS')
+          ORDER BY CNT.登録日
+           ;
+
+    if( sqlca.sqlcode < 0 ){
+		sprintf( g_szDtlMsg,
+				"DECLARE(CUR_UGN) エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+		send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        return( ERROR );
+    }
+
+	G_POSITION = __LINE__;
+    EXEC SQL OPEN CUR_UGN;
+    if( sqlca.sqlcode < 0 ){
+		sprintf( g_szDtlMsg,
+				"カーソル(CUR_UGN)オープン・エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+		send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        EXEC SQL CLOSE CUR_UGN;
+        return( ERROR );
+    }
+
+    while( 1 ) {
+
+        memset( h_ContactID, 0x00, sizeof(h_ContactID) );
+        hi_ContactID = ORA_NULL;
+        memset( h_CallTimestamp, 0x00, sizeof(h_CallTimestamp) );
+        hi_CallTimestamp = ORA_NULL;
+        memset( h_CampaignID, 0x00, sizeof(h_CampaignID) );
+        hi_CampaignID = ORA_NULL;
+        memset( h_CampaignName, 0x00, sizeof(h_CampaignName) );
+        hi_CampaignName = ORA_NULL;
+        memset( h_CallStatus, 0x00, sizeof(h_CallStatus) );
+        hi_CallStatus = ORA_NULL;
+        memset( h_UserID, 0x00, sizeof(h_UserID) );
+        hi_UserID = ORA_NULL;
+        h_lEdaNo = 0;
+        hi_lEdaNo = ORA_NULL;
+        memset( h_CIFNO, 0x00, sizeof(h_CIFNO) );
+        hi_CIFNO = ORA_NULL;
+        memset( h_TradeTarget, 0x00, sizeof(h_TradeTarget) );
+        hi_TradeTarget = ORA_NULL;
+        memset( h_Type, 0x00, sizeof(h_Type) );
+        hi_Type = ORA_NULL;
+        memset( h_ServiceType, 0x00, sizeof(h_ServiceType) );
+        hi_ServiceType = ORA_NULL;
+        memset( h_Shohin, 0x00, sizeof(h_Shohin) );
+        hi_Shohin = ORA_NULL;
+        memset( h_ResponseMedia, 0x00, sizeof(h_ResponseMedia) );
+        hi_ResponseMedia = ORA_NULL;
+        memset( h_ExternalType, 0x00, sizeof(h_ExternalType) );
+        hi_ExternalType = ORA_NULL;
+
+        G_POSITION = __LINE__;
+		EXEC SQL FETCH CUR_UGN
+                INTO
+                    :h_ContactID :hi_ContactID,
+                    :h_CallTimestamp :hi_CallTimestamp,
+                    :h_CampaignID :hi_CampaignID,
+                    :h_CampaignName :hi_CampaignName,
+                    :h_CallStatus :hi_CallStatus,
+                    :h_UserID :hi_UserID,
+                    :h_lEdaNo :hi_lEdaNo,
+                    :h_CIFNO :hi_CIFNO,
+                    :h_TradeTarget :hi_TradeTarget,
+                    :h_Type :hi_Type,
+                    :h_ServiceType :hi_ServiceType,
+                    :h_Shohin :hi_Shohin,
+                    :h_ResponseMedia :hi_ResponseMedia,
+                    :h_ExternalType :hi_ExternalType
+                ;
+        if (sqlca.sqlcode == ORA_NOF){
+            break;
+        }
+        else if (sqlca.sqlcode < 0){
+			sprintf( g_szDtlMsg,
+				"カーソル(CUR_UGN) FETCHエラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+			send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+            rc = ERROR;
+            break;
+        }
+
+        /* 受付け者名取得 */
+        rc = getUser();
+        if (rc != NORMAL){
+            break;
+        }
+
+        /* コンタクト履歴ファイル作成 */
+        rc = makeSendFile();
+        if (rc != NORMAL){
+            break;
+        }
+
+    } /* while loop end */
+
+    EXEC SQL CLOSE CUR_UGN;
+
+    return( rc );
+
+}
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   int makeSalesLog( )                                                     */
+/*                                                                           */
+/* Description:                                                              */
+/*   更新セールス履歴抽出                                                    */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  --------------------------------------- */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   None                                                                    */
+/*                                                                           */
+/* Return Code:                                                              */
+/*        NORMAL   : 正常                                                    */
+/*        ERROR    : 異常                                                    */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int makeSalesLog()
+{
+
+    int rc = NORMAL;
+
+	G_POSITION = __LINE__;
+    EXEC SQL DECLARE CUR_USA CURSOR FOR
+            SELECT CNT.コンタクトID,
+                   TO_CHAR(CNT.コール日時, 'YYYY-MM-DD HH24:MI:SS'),
+                   CNT.キャンペーンID,
+                   RTRIM(CNT.キャンペーン略称),
+                   CNT.コール状況,
+                   CNT.受付ユーザID,
+                   SRV.枝番,
+                   RTRIM(SRV.CIFNO),
+                   SRV.交渉相手,
+                   SRV.種類,
+                   SRV.サービス種別ID,
+                   SRV.商品ID,
+                   SRV.レスポンスメディア,
+                   SRV.外部データ区分
+              FROM TH_サービスログ SRV,
+				   TH_コンタクト履歴 CNT,
+				   TH_セールス履歴 SAL 
+             WHERE SRV.コンタクトID = CNT.コンタクトID
+			   AND SRV.コンタクトID = SAL.コンタクトID
+			   AND SRV.枝番 = SAL.枝番
+			   AND CNT.コール日時 > add_months(sysdate ,-24)
+               AND CNT.登録日 < TO_DATE(:h_FROM_TS,'YYYYMMDD HH24MISS')
+               AND SRV.移行履歴フラグ is null
+               AND LENGTH(RTRIM(SRV.CIFNO)) = 7
+               AND SRV.種類 = '04'
+			   AND SAL.登録日 BETWEEN TO_DATE(:h_FROM_TS,'YYYYMMDD HH24MISS') AND TO_DATE(:h_TO_TS,'YYYYMMDD HH24MISS')
+          ORDER BY CNT.登録日
+           ;
+    if( sqlca.sqlcode < 0 ){
+		sprintf( g_szDtlMsg,
+				"DECLARE(CUR_USA) エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+		send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        return( ERROR );
+    }
+
+    G_POSITION = __LINE__;
+	EXEC SQL OPEN CUR_USA;
+    if( sqlca.sqlcode < 0 ){
+		sprintf( g_szDtlMsg,
+				"カーソル(CUR_USA)オープン・エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+		send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        EXEC SQL CLOSE CUR_USA;
+        return( ERROR );
+    }
+
+    while( 1 ) {
+
+        memset( h_ContactID, 0x00, sizeof(h_ContactID) );
+        hi_ContactID = ORA_NULL;
+        memset( h_CallTimestamp, 0x00, sizeof(h_CallTimestamp) );
+        hi_CallTimestamp = ORA_NULL;
+        memset( h_CampaignID, 0x00, sizeof(h_CampaignID) );
+        hi_CampaignID = ORA_NULL;
+        memset( h_CampaignName, 0x00, sizeof(h_CampaignName) );
+        hi_CampaignName = ORA_NULL;
+        memset( h_CallStatus, 0x00, sizeof(h_CallStatus) );
+        hi_CallStatus = ORA_NULL;
+        memset( h_UserID, 0x00, sizeof(h_UserID) );
+        hi_UserID = ORA_NULL;
+        h_lEdaNo = 0;
+        hi_lEdaNo = ORA_NULL;
+        memset( h_CIFNO, 0x00, sizeof(h_CIFNO) );
+        hi_CIFNO = ORA_NULL;
+        memset( h_TradeTarget, 0x00, sizeof(h_TradeTarget) );
+        hi_TradeTarget = ORA_NULL;
+        memset( h_Type, 0x00, sizeof(h_Type) );
+        hi_Type = ORA_NULL;
+        memset( h_ServiceType, 0x00, sizeof(h_ServiceType) );
+        hi_ServiceType = ORA_NULL;
+        memset( h_Shohin, 0x00, sizeof(h_Shohin) );
+        hi_Shohin = ORA_NULL;
+        memset( h_ResponseMedia, 0x00, sizeof(h_ResponseMedia) );
+        hi_ResponseMedia = ORA_NULL;
+        memset( h_ExternalType, 0x00, sizeof(h_ExternalType) );
+        hi_ExternalType = ORA_NULL;
+
+        G_POSITION = __LINE__;
+		EXEC SQL FETCH CUR_USA
+                INTO
+                    :h_ContactID :hi_ContactID,
+                    :h_CallTimestamp :hi_CallTimestamp,
+                    :h_CampaignID :hi_CampaignID,
+                    :h_CampaignName :hi_CampaignName,
+                    :h_CallStatus :hi_CallStatus,
+                    :h_UserID :hi_UserID,
+                    :h_lEdaNo :hi_lEdaNo,
+                    :h_CIFNO :hi_CIFNO,
+                    :h_TradeTarget :hi_TradeTarget,
+                    :h_Type :hi_Type,
+                    :h_ServiceType :hi_ServiceType,
+                    :h_Shohin :hi_Shohin,
+                    :h_ResponseMedia :hi_ResponseMedia,
+                    :h_ExternalType :hi_ExternalType
+                ;
+        if (sqlca.sqlcode == ORA_NOF){
+            break;
+        }
+        else if (sqlca.sqlcode < 0){
+			sprintf( g_szDtlMsg,
+				"カーソル(CUR_USA) FETCHエラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+			send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+            rc = ERROR;
+            break;
+        }
+
+        /* 受付け者名取得 */
+        rc = getUser();
+        if (rc != NORMAL){
+            break;
+        }
+
+        /* コンタクト履歴ファイル作成 */
+        rc = makeSendFile();
+        if (rc != NORMAL){
+            break;
+        }
+
+    } /* while loop end */
+
+    EXEC SQL CLOSE CUR_USA;
+
+    return( rc );
+
+}
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   int makeClaimLog( )                                                     */
+/*                                                                           */
+/* Description:                                                              */
+/*   更新クレーム履歴抽出                                                    */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  --------------------------------------- */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   None                                                                    */
+/*                                                                           */
+/* Return Code:                                                              */
+/*        NORMAL   : 正常                                                    */
+/*        ERROR    : 異常                                                    */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int makeClaimLog()
+{
+
+    int rc = NORMAL;
+
+	G_POSITION = __LINE__;
+    EXEC SQL DECLARE CUR_UCL CURSOR FOR
+            SELECT CNT.コンタクトID,
+                   TO_char(CNT.コール日時, 'YYYY-MM-DD HH24:MI:SS'),
+                   CNT.キャンペーンID,
+                   RTRIM(CNT.キャンペーン略称),
+                   CNT.コール状況,
+                   CNT.受付ユーザID,
+                   SRV.枝番,
+                   RTRIM(SRV.CIFNO),
+                   SRV.交渉相手,
+                   SRV.種類,
+                   SRV.サービス種別ID,
+                   SRV.商品ID,
+                   SRV.レスポンスメディア,
+                   SRV.外部データ区分
+              FROM TH_サービスログ SRV,
+				   TH_コンタクト履歴 CNT,
+				   TH_クレーム履歴 CLM 
+             WHERE SRV.コンタクトID = CNT.コンタクトID
+			   AND SRV.コンタクトID = CLM.コンタクトID
+			   AND SRV.枝番 = CLM.枝番
+			   AND CNT.コール日時 > add_months(sysdate ,-24)
+               AND CNT.登録日 < TO_DATE(:h_FROM_TS,'YYYYMMDD HH24MISS')
+               AND SRV.移行履歴フラグ is null
+               AND LENGTH(RTRIM(SRV.CIFNO)) = 7
+               AND SRV.種類 = '06'
+			   AND CLM.登録日 BETWEEN TO_DATE(:h_FROM_TS,'YYYYMMDD HH24MISS') AND TO_DATE(:h_TO_TS,'YYYYMMDD HH24MISS')
+          ORDER BY CNT.登録日
+           ;
+    if( sqlca.sqlcode < 0 ){
+		sprintf( g_szDtlMsg,
+				"DECLARE(CUR_UCL) エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+		send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        return( ERROR );
+    }
+
+	G_POSITION = __LINE__;
+    EXEC SQL OPEN CUR_UCL;
+    if( sqlca.sqlcode < 0 ){
+		sprintf( g_szDtlMsg,
+				"カーソル(CUR_UCL)オープン・エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+		send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        EXEC SQL CLOSE CUR_UCL;
+        return( ERROR );
+    }
+
+    while( 1 ) {
+
+        memset( h_ContactID, 0x00, sizeof(h_ContactID) );
+        hi_ContactID = ORA_NULL;
+        memset( h_CallTimestamp, 0x00, sizeof(h_CallTimestamp) );
+        hi_CallTimestamp = ORA_NULL;
+        memset( h_CampaignID, 0x00, sizeof(h_CampaignID) );
+        hi_CampaignID = ORA_NULL;
+        memset( h_CampaignName, 0x00, sizeof(h_CampaignName) );
+        hi_CampaignName = ORA_NULL;
+        memset( h_CallStatus, 0x00, sizeof(h_CallStatus) );
+        hi_CallStatus = ORA_NULL;
+        memset( h_UserID, 0x00, sizeof(h_UserID) );
+        hi_UserID = ORA_NULL;
+        h_lEdaNo = 0;
+        hi_lEdaNo = ORA_NULL;
+        memset( h_CIFNO, 0x00, sizeof(h_CIFNO) );
+        hi_CIFNO = ORA_NULL;
+        memset( h_TradeTarget, 0x00, sizeof(h_TradeTarget) );
+        hi_TradeTarget = ORA_NULL;
+        memset( h_Type, 0x00, sizeof(h_Type) );
+        hi_Type = ORA_NULL;
+        memset( h_ServiceType, 0x00, sizeof(h_ServiceType) );
+        hi_ServiceType = ORA_NULL;
+        memset( h_Shohin, 0x00, sizeof(h_Shohin) );
+        hi_Shohin = ORA_NULL;
+        memset( h_ResponseMedia, 0x00, sizeof(h_ResponseMedia) );
+        hi_ResponseMedia = ORA_NULL;
+        memset( h_ExternalType, 0x00, sizeof(h_ExternalType) );
+        hi_ExternalType = ORA_NULL;
+
+		G_POSITION = __LINE__;
+        EXEC SQL FETCH CUR_UCL
+                INTO
+                    :h_ContactID :hi_ContactID,
+                    :h_CallTimestamp :hi_CallTimestamp,
+                    :h_CampaignID :hi_CampaignID,
+                    :h_CampaignName :hi_CampaignName,
+                    :h_CallStatus :hi_CallStatus,
+                    :h_UserID :hi_UserID,
+                    :h_lEdaNo :hi_lEdaNo,
+                    :h_CIFNO :hi_CIFNO,
+                    :h_TradeTarget :hi_TradeTarget,
+                    :h_Type :hi_Type,
+                    :h_ServiceType :hi_ServiceType,
+                    :h_Shohin :hi_Shohin,
+                    :h_ResponseMedia :hi_ResponseMedia,
+                    :h_ExternalType :hi_ExternalType
+                ;
+        if (sqlca.sqlcode == ORA_NOF){
+            break;
+        }
+        else if (sqlca.sqlcode < 0){
+			sprintf( g_szDtlMsg,
+				"カーソル(CUR_UCL) FETCHエラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+			send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+            rc = ERROR;
+            break;
+        }
+
+        /* 受付け者名取得 */
+        rc = getUser();
+        if (rc != NORMAL){
+            break;
+        }
+
+        /* コンタクト履歴ファイル作成 */
+        rc = makeSendFile();
+        if (rc != NORMAL){
+            break;
+        }
+
+    } /* while loop end */
+
+    EXEC SQL CLOSE CUR_UCL;
+
+    return( rc );
+
+}
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   int makeNewHistory( )                                                   */
+/*                                                                           */
+/* Description:                                                              */
+/*   新規登録履歴抽出                                                        */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  --------------------------------------- */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   None                                                                    */
+/*                                                                           */
+/* Return Code:                                                              */
+/*        NORMAL   : 正常                                                    */
+/*        ERROR    : 異常                                                    */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int makeNewHistory()
+{
+
+    int cnt = 0;
+    int rc = NORMAL;
+
+    rc = NORMAL;
+
+	G_POSITION = __LINE__;
+    EXEC SQL DECLARE CUR_NSV CURSOR FOR
+            SELECT CNT.コンタクトID,
+                   TO_char(CNT.コール日時, 'YYYY-MM-DD HH24:MI:SS'),
+                   CNT.キャンペーンID,
+                   RTRIM(CNT.キャンペーン略称),
+                   CNT.コール状況,
+                   CNT.受付ユーザID,
+                   SRV.枝番,
+                   RTRIM(SRV.CIFNO),
+                   SRV.交渉相手,
+                   SRV.種類,
+                   SRV.サービス種別ID,
+                   SRV.商品ID,
+                   SRV.レスポンスメディア,
+                   SRV.外部データ区分
+              FROM TH_コンタクト履歴 CNT, TH_サービスログ SRV
+             WHERE CNT.コンタクトID = SRV.コンタクトID
+			   AND CNT.コール日時 > add_months(sysdate ,-24)
+               AND SRV.移行履歴フラグ is null
+               AND SRV.種類 != '10'
+               AND LENGTH(RTRIM(SRV.CIFNO)) = 7
+			   AND CNT.登録日 BETWEEN TO_DATE(:h_FROM_TS,'YYYYMMDD HH24MISS') AND TO_DATE(:h_TO_TS,'YYYYMMDD HH24MISS')
+               AND SRV.種類 != '02'
+               AND SRV.種類 != '03'
+               AND SRV.種類 != '11'
+               AND (SRV.外部データ区分 != '0' OR SRV.外部データ区分 IS NULL)
+          ORDER BY CNT.登録日
+           ;
+    if( sqlca.sqlcode < 0 ){
+		sprintf( g_szDtlMsg,
+				"DECLARE(CUR_NSV) エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+		send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        return( ERROR );
+    }
+
+	G_POSITION = __LINE__;
+    EXEC SQL OPEN CUR_NSV;
+    if( sqlca.sqlcode < 0 ){
+		sprintf( g_szDtlMsg,
+				"カーソル(CUR_NSV)オープン・エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+		send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        EXEC SQL CLOSE CUR_NSV;
+        return( ERROR );
+    }
+
+    while( 1 ) {
+
+        memset( h_ContactID, 0x00, sizeof(h_ContactID) );
+        hi_ContactID = ORA_NULL;
+        memset( h_CallTimestamp, 0x00, sizeof(h_CallTimestamp) );
+        hi_CallTimestamp = ORA_NULL;
+        memset( h_CampaignID, 0x00, sizeof(h_CampaignID) );
+        hi_CampaignID = ORA_NULL;
+        memset( h_CampaignName, 0x00, sizeof(h_CampaignName) );
+        hi_CampaignName = ORA_NULL;
+        memset( h_CallStatus, 0x00, sizeof(h_CallStatus) );
+        hi_CallStatus = ORA_NULL;
+        memset( h_UserID, 0x00, sizeof(h_UserID) );
+        hi_UserID = ORA_NULL;
+        h_lEdaNo = 0;
+        hi_lEdaNo = ORA_NULL;
+        memset( h_CIFNO, 0x00, sizeof(h_CIFNO) );
+        hi_CIFNO = ORA_NULL;
+        memset( h_TradeTarget, 0x00, sizeof(h_TradeTarget) );
+        hi_TradeTarget = ORA_NULL;
+        memset( h_Type, 0x00, sizeof(h_Type) );
+        hi_Type = ORA_NULL;
+        memset( h_ServiceType, 0x00, sizeof(h_ServiceType) );
+        hi_ServiceType = ORA_NULL;
+        memset( h_Shohin, 0x00, sizeof(h_Shohin) );
+        hi_Shohin = ORA_NULL;
+        memset( h_ResponseMedia, 0x00, sizeof(h_ResponseMedia) );
+        hi_ResponseMedia = ORA_NULL;
+        memset( h_ExternalType, 0x00, sizeof(h_ExternalType) );
+        hi_ExternalType = ORA_NULL;
+
+		G_POSITION = __LINE__;
+		EXEC SQL FETCH CUR_NSV
+                INTO
+                    :h_ContactID :hi_ContactID,
+                    :h_CallTimestamp :hi_CallTimestamp,
+                    :h_CampaignID :hi_CampaignID,
+                    :h_CampaignName :hi_CampaignName,
+                    :h_CallStatus :hi_CallStatus,
+                    :h_UserID :hi_UserID,
+                    :h_lEdaNo :hi_lEdaNo,
+                    :h_CIFNO :hi_CIFNO,
+                    :h_TradeTarget :hi_TradeTarget,
+                    :h_Type :hi_Type,
+                    :h_ServiceType :hi_ServiceType,
+                    :h_Shohin :hi_Shohin,
+                    :h_ResponseMedia :hi_ResponseMedia,
+                    :h_ExternalType :hi_ExternalType
+                ;
+        if (sqlca.sqlcode == ORA_NOF){
+            break;
+        }
+        else if (sqlca.sqlcode < 0){
+			sprintf( g_szDtlMsg,
+				"カーソル(CUR_NSV) FETCHエラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+			send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+            rc = ERROR;
+            break;
+        }
+
+        /* 受付け者名取得 */
+        rc = getUser();
+        if (rc != NORMAL){
+            break;
+        }
+
+        /* コンタクト履歴ファイル作成 */
+        rc = makeSendFile();
+        if (rc != NORMAL){
+            break;
+        }
+
+    } /* while loop end */
+
+    EXEC SQL CLOSE CUR_NSV;
+
+    return( rc );
+
+}
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   int getUser( )                                                          */
+/*                                                                           */
+/* Description:                                                              */
+/*   ユーザ情報取得                                                          */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  --------------------------------------- */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   None                                                                    */
+/*                                                                           */
+/* Return Code:                                                              */
+/*        NORMAL   : 正常                                                    */
+/*        ERROR    : SELECT異常                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int getUser()
+{
+
+	G_POSITION = __LINE__;
+    EXEC SQL SELECT RTRIM(ユーザ略称) INTO :h_UserShortName :hi_UserShortName
+            FROM TM_ユーザ
+            WHERE ユーザID = :h_UserID
+            ;
+    if( sqlca.sqlcode < 0 ){
+		sprintf( g_szDtlMsg,
+				"TM_ユーザ SELECT エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+			send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        return( ERROR );
+    }
+
+
+    return( NORMAL );
+
+}
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   int makeSendFile( )                                                     */
+/*                                                                           */
+/* Description:                                                              */
+/*   送信ファイル作成                                                        */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  --------------------------------------- */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   None                                                                    */
+/*                                                                           */
+/* Return Code:                                                              */
+/*        NORMAL         : 正常                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int makeSendFile()
+{
+
+    int rc;
+
+    rc = NORMAL;
+
+    memset( h_EdaNo, 0x00, sizeof(h_EdaNo) );
+    sprintf( h_EdaNo, "%d", h_lEdaNo );
+    hi_EdaNo = ORA_NOT_NULL;
+
+    memset( &g_SendRec, 0x00, sizeof(g_SendRec) );
+
+
+    /* 顧客管理番号 設定 */
+    rc = setCustomerNo();
+
+    /* キャンペーンID 設定 */
+    strcat( g_SendRec, h_CampaignID );
+    g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+    /* 取引先番号 設定 */
+	rtrim(h_CIFNO); /*　SELECT時のRTRIMが効かないので 関数でRTRIM */
+    strcat( g_SendRec, h_CIFNO );
+    g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+    /* コール日時 設定 */
+    strncat( g_SendRec, &h_CallTimestamp[0], 4 );
+    strncat( g_SendRec, &h_CallTimestamp[5], 2 );
+    strncat( g_SendRec, &h_CallTimestamp[8], 2 );
+    strncat( g_SendRec, &h_CallTimestamp[11], 2 );
+    strncat( g_SendRec, &h_CallTimestamp[14], 2 );
+    g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+
+    /* キャンペーン名 設定 */
+    setCampaignName();
+
+
+
+    /* 受付け者名 設定 */
+    strcat( g_SendRec, h_UserShortName );
+    g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+
+    /* 交渉相手設定 */
+    rc = setKosho();
+    if (rc != NORMAL){
+        return( rc );
+    }
+
+
+    /* サービス／結果設定 */
+    rc = setService();
+    if (rc != NORMAL){
+        return( rc );
+    }
+
+
+    /* 種別＝一般 */
+    if ( memcmp(h_Type, CONTACT_LOG_S_TYPE_IP, 2) == 0 ){
+        /* 特記事項設定 */
+        rc = setIppanTokki();
+        if (rc != NORMAL){
+            return( rc );
+        }
+    }
+    /* 種別＝セールス */
+    else if ( memcmp(h_Type, CONTACT_LOG_S_TYPE_SL, 2) == 0 ){
+        /* 特記事項設定 */
+        rc = setSalesTokki();
+        if (rc != NORMAL){
+            return( rc );
+        }
+    }
+    else {
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+    }
+
+
+    /* 種別＝クレーム */
+    if ( memcmp(h_Type, CONTACT_LOG_S_TYPE_CL, 2) == 0 ){
+        rc = setClaim();
+        if (rc != NORMAL){
+            return( rc );
+        }
+    }
+    else {
+
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+    }
+
+    /* レスポンスメディア 設定 */
+    if (hi_ResponseMedia == ORA_NULL){
+
+        rc = setInbMeisaiName( hw_ResponseMediaID );
+        if (rc != NORMAL){
+            return( rc );
+        }
+    }
+    else {
+        /* インバウンドの場合のみ設定 */
+        if ( memcmp(h_CampaignID, CONTACT_LOG_S_INB, 4) == 0 ){
+            strncpy( h_KomokuID, hw_ResponseMediaID, 4 );
+            strncpy( h_MeisaiID, h_ResponseMedia, 4 );
+            rc = getMeisaiName();
+            if (rc != NORMAL){
+                return( rc );
+            }
+            strncat( g_SendRec, h_KaiwaD.arr, h_KaiwaD.len );
+        }
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+    }
+
+
+    /* 問合せ商品 設定 */
+
+    rc = setInbMeisaiName( hw_Shohin1ID );
+    if (rc != NORMAL){
+        return( rc );
+    }
+
+    /* 改行コード */
+    /*g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x0d; %02 DELETE */
+    g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x0a;
+
+
+    /* ファイル書込み */
+    fwrite( g_SendRec, (unsigned int)strlen(g_SendRec), 1, g_pfSendFile );
+    if( ferror( g_pfSendFile ) != 0 ) {
+		send_err ( m$file_write, errno, g_szSendFile, g_SendRec , NULL, G_STATION);
+        return( errno );
+    }
+
+	dCount.iRecNum++;
+
+    return( NORMAL );
+
+}
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   int setInbMeisaiName( )                                                 */
+/*                                                                           */
+/* Description:                                                              */
+/*   インバウンド会話明細名設定                                              */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* pKomokuID       char*         I   会話項目ID                              */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   None                                                                    */
+/*                                                                           */
+/* Return Code:                                                              */
+/*        NORMAL   : 正常                                                    */
+/*        ERROR    : SELECT異常                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int setInbMeisaiName( char *pKomokuID )
+{
+
+    int rc = NORMAL;
+
+    /* アウトバウンドの場合設定なし */
+    if ( memcmp(h_CampaignID, CONTACT_LOG_S_INB, 4) != 0 ){
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        return( NORMAL );
+    }
+
+    /* 会話項目ID 設定 */
+    strncpy( h_KomokuID, pKomokuID, 4 );
+
+    if (memcmp( h_Type, CONTACT_LOG_S_TYPE_IP, 2 ) == 0 ){
+
+		G_POSITION = __LINE__;
+        EXEC SQL SELECT COUNT(*) INTO :h_DATA_COUNT
+                FROM TH_一般履歴
+                WHERE コンタクトID = :h_ContactID
+                  AND 枝番 = :h_lEdaNo;
+        if( sqlca.sqlcode < 0 ){
+			sprintf( g_szDtlMsg,
+					"TH_一般履歴 COUNT エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+				send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+            return( ERROR );
+        }
+
+        if (h_DATA_COUNT > 0){
+            memset( h_IppanColumnName, 0x00, sizeof(h_IppanColumnName) );
+            hi_IppanColumnName = ORA_NULL;
+
+			G_POSITION = __LINE__;
+            EXEC SQL SELECT 一般履歴カラム名
+                    INTO :h_IppanColumnName :hi_IppanColumnName
+                    FROM TM_会話項目
+                    WHERE 会話項目ID = :h_KomokuID;
+            if( sqlca.sqlcode < 0 ){
+				sprintf( g_szDtlMsg,
+					"TM_会話項目 SELECT エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+				send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+                return( ERROR );
+            }
+            rc = getMeisaiFromColumn();
+            if (rc != NORMAL){
+                return( rc );
+            }
+        }
+    }
+
+    g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+    return( rc );
+
+}
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   int getMeisaiFromColumn( )                                              */
+/*                                                                           */
+/* Description:                                                              */
+/*   会話明細取得（履歴より）                                                */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   None                                                                    */
+/*                                                                           */
+/* Return Code:                                                              */
+/*        NORMAL   : 正常                                                    */
+/*        ERROR    : SELECT異常                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int getMeisaiFromColumn()
+{
+
+    int rc = NORMAL;
+
+    if (hi_IppanColumnName == ORA_NULL){
+        return( NORMAL );
+    }
+
+    memset( sqlcmd, 0x00, sizeof(sqlcmd) );
+    strcpy( sqlcmd, "SELECT " );
+    strcat( sqlcmd, h_IppanColumnName );
+    strcat( sqlcmd, " FROM " );
+    strcat( sqlcmd, "TH_一般履歴 " );
+    strcat( sqlcmd, "WHERE コンタクトID = '" );
+    strcat( sqlcmd, h_ContactID );
+    strcat( sqlcmd, "' " );
+    strcat( sqlcmd, "AND 枝番 = " );
+    strcat( sqlcmd, h_EdaNo );
+    strcat( sqlcmd, " " );
+
+
+	G_POSITION = __LINE__;
+    EXEC SQL PREPARE SQL_HX FROM :sqlcmd;
+    if( sqlca.sqlcode < 0 ){
+		sprintf( g_szDtlMsg,
+					"PREPARE(SQL_HX) エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+		send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        return( ERROR );
+    }
+
+	G_POSITION = __LINE__;
+    EXEC SQL DECLARE CUR_HX CURSOR FOR SQL_HX;
+    if( sqlca.sqlcode < 0 ){
+		sprintf( g_szDtlMsg,
+					"DECLARE(CUR_HX) エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+		send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        return( ERROR );
+    }
+
+	G_POSITION = __LINE__;
+    EXEC SQL OPEN CUR_HX;
+    if( sqlca.sqlcode < 0 ){
+		sprintf( g_szDtlMsg,
+					"カーソル(CUR_HX)オープン・エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+		send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        return( ERROR );
+    }
+
+    memset( h_MeisaiID, 0x00, sizeof(h_MeisaiID) );
+    hi_MeisaiID = ORA_NULL;
+
+	G_POSITION = __LINE__;
+    EXEC SQL FETCH CUR_HX
+            INTO :h_MeisaiID :hi_MeisaiID;
+    if ( sqlca.sqlcode < 0 ) {
+		sprintf( g_szDtlMsg,
+					"FETCH(CUR_HX) エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+		send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        EXEC SQL CLOSE CUR_HX;
+        return( ERROR );
+    }
+
+	EXEC SQL CLOSE CUR_HX;
+
+
+    if (hi_MeisaiID != ORA_NULL){
+        /* 会話明細名 取得 */
+        rc = getMeisaiName();
+        if (rc != NORMAL){
+            return( rc );
+        }
+        strncat( g_SendRec, h_KaiwaD.arr, h_KaiwaD.len );
+    }
+
+    return( rc );
+}
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   int setClaim( )                                                         */
+/*                                                                           */
+/* Description:                                                              */
+/*   クレーム設定                                                            */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   None                                                                    */
+/*                                                                           */
+/* Return Code:                                                              */
+/*        NORMAL   : 正常                                                    */
+/*        ERROR    : SELECT異常                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int setClaim()
+{
+	int rc;
+
+	G_POSITION = __LINE__;
+    EXEC SQL SELECT COUNT(*) INTO :h_DATA_COUNT
+            FROM TH_クレーム履歴
+            WHERE コンタクトID = :h_ContactID
+              AND 枝番 = :h_lEdaNo;
+    if( sqlca.sqlcode < 0 ){
+        sprintf( g_szDtlMsg,
+					"TH_クレーム履歴 SELECT COUNT エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+		send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        return( ERROR );
+    }
+
+    /* クレーム履歴なし */
+    if (h_DATA_COUNT == 0){
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        return( NORMAL );
+    }
+
+    memset( &h_Claim1, 0x00, sizeof(h_Claim1) );
+    h_Claim1.len = 0;
+    hi_Claim2 = ORA_NULL;
+    memset( &h_Claim2, 0x00, sizeof(h_Claim2) );
+    h_Claim2.len = 0;
+    hi_Claim2 = ORA_NULL;
+    memset( &h_Claim3, 0x00, sizeof(h_Claim3) );
+    h_Claim3.len = 0;
+    hi_Claim3 = ORA_NULL;
+    memset( &h_Claim4, 0x00, sizeof(h_Claim4) );
+    h_Claim4.len = 0;
+    hi_Claim4 = ORA_NULL;
+
+    G_POSITION = __LINE__;
+	EXEC SQL SELECT 
+				REPLACE(REPLACE(REPLACE(クレーム内容1,CHR(13) || CHR(10), ' '),CHR(13), ' '),CHR(10), ' '),
+				REPLACE(REPLACE(REPLACE(クレーム内容2,CHR(13) || CHR(10), ' '),CHR(13), ' '),CHR(10), ' '),
+				REPLACE(REPLACE(REPLACE(クレーム内容3,CHR(13) || CHR(10), ' '),CHR(13), ' '),CHR(10), ' '),
+				REPLACE(REPLACE(REPLACE(クレーム内容4,CHR(13) || CHR(10), ' '),CHR(13), ' '),CHR(10), ' ')
+            INTO :h_Claim1 :hi_Claim1,
+                 :h_Claim2 :hi_Claim2,
+                 :h_Claim3 :hi_Claim3,
+                 :h_Claim4 :hi_Claim4
+            FROM TH_クレーム履歴
+            WHERE コンタクトID = :h_ContactID
+              AND 枝番 = :h_lEdaNo
+            ;
+    if( sqlca.sqlcode < 0 ){
+		sprintf( g_szDtlMsg,
+					"TH_クレーム履歴 SELECT エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+		send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        return( ERROR );
+    }
+
+    /* クレーム内容1 */
+    if (hi_Claim1 != ORA_NULL){
+		rc = tab_to_space ( h_Claim1.arr );
+        if (h_Claim1.len > 100) {
+            strncat( g_SendRec, h_Claim1.arr, 100 );
+        }
+        else {
+            strncat( g_SendRec, h_Claim1.arr, h_Claim1.len );
+        }
+    }
+    g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+    /* クレーム内容2 */
+    if (hi_Claim2 != ORA_NULL){
+		rc = tab_to_space ( h_Claim2.arr );
+        if (h_Claim2.len > 100) {
+            strncat( g_SendRec, h_Claim2.arr, 100 );
+        }
+        else {
+            strncat( g_SendRec, h_Claim2.arr, h_Claim2.len );
+        }
+    }
+    g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+    /* クレーム内容3 */
+    if (hi_Claim3 != ORA_NULL){
+		rc = tab_to_space ( h_Claim3.arr );
+        if (h_Claim3.len > 100) {
+            strncat( g_SendRec, h_Claim3.arr, 100 );
+        }
+        else {
+            strncat( g_SendRec, h_Claim3.arr, h_Claim3.len );
+        }
+    }
+    g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+    /* クレーム内容4 */
+    if (hi_Claim4 != ORA_NULL){
+		rc = tab_to_space ( h_Claim4.arr );
+        if (h_Claim4.len > 100) {
+            strncat( g_SendRec, h_Claim4.arr, 100 );
+        }
+        else {
+            strncat( g_SendRec, h_Claim4.arr, h_Claim4.len );
+        }
+    }
+    g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+    return( NORMAL );
+}
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   int setSalesTokki( )                                                    */
+/*                                                                           */
+/* Description:                                                              */
+/*   セールス履歴特記事項設定                                                */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   None                                                                    */
+/*                                                                           */
+/* Return Code:                                                              */
+/*        NORMAL   : 正常                                                    */
+/*        ERROR    : SELECT異常                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int setSalesTokki()
+{
+	int rc;
+	int c_len;	/* コメントレングス */
+
+	G_POSITION = __LINE__;
+    EXEC SQL SELECT COUNT(*) INTO :h_DATA_COUNT
+            FROM TH_セールス履歴
+            WHERE コンタクトID = :h_ContactID
+              AND 枝番 = :h_lEdaNo;
+    if( sqlca.sqlcode < 0 ){
+		sprintf( g_szDtlMsg,
+					"TH_セールス履歴 SELECT COUNT エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+		send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        return( ERROR );
+    }
+
+    /* セースル履歴なし */
+    if (h_DATA_COUNT == 0){
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        return( NORMAL );
+    }
+
+    memset( &h_Comment1, 0x00, sizeof(h_Comment1) );
+    h_Comment1.len = 0;
+    hi_Comment1 = ORA_NULL;
+    memset( &h_Comment2, 0x00, sizeof(h_Comment2) );
+    h_Comment2.len = 0;
+    hi_Comment2 = ORA_NULL;
+
+	/* %03 Change 改行コードをスペース変換 */
+	G_POSITION = __LINE__;
+    EXEC SQL SELECT 
+				REPLACE(REPLACE(REPLACE(コメント1,CHR(13) || CHR(10), ' '),CHR(13), ' '),CHR(10), ' '),
+				REPLACE(REPLACE(REPLACE(コメント2,CHR(13) || CHR(10), ' '),CHR(13), ' '),CHR(10), ' ')
+            INTO :h_Comment1 :hi_Comment1,
+                 :h_Comment2 :hi_Comment2
+            FROM TH_セールス履歴
+            WHERE コンタクトID = :h_ContactID
+              AND 枝番 = :h_lEdaNo
+            ;
+    if( sqlca.sqlcode < 0 ){
+		sprintf( g_szDtlMsg,
+					"TH_セールス履歴 SELECT  エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+		send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        return( ERROR );
+    }
+
+	/* %03 Add */
+	if ( hi_Comment1 != ORA_NULL ){
+		memset ( comment_buf, 0x00, sizeof(comment_buf) ) ;
+		strcpy ( comment_buf, h_Comment1.arr );
+		strcat ( comment_buf, h_Comment2.arr );
+	
+		rc = tab_to_space ( comment_buf );
+
+		memset ( out_comment_buf, 0x00, sizeof(out_comment_buf) ) ;
+		rc = comment_edit ( comment_buf, out_comment_buf );
+		c_len = (unsigned int)strlen (out_comment_buf);
+
+	}
+
+	/* コメント1 %01 Change */
+    if ( hi_Comment1 != ORA_NULL ){
+        if (c_len <= 100 ) {
+			out_edit ( out_comment_buf, tmp_buf , 1 ,  c_len );
+			strcat( g_SendRec, tmp_buf );
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+		}
+		else if ( c_len > 100 && c_len <= 200 ) {
+			out_edit ( out_comment_buf, tmp_buf , 1 , 100 );
+			strcat( g_SendRec, tmp_buf );
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+			out_edit ( out_comment_buf, tmp_buf , 2 ,  c_len - 200 );
+			strcat( g_SendRec, tmp_buf );
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+		}
+		else if ( c_len > 200 && c_len <= 300 ) {
+			out_edit ( out_comment_buf, tmp_buf , 1 , 100 );
+			strcat( g_SendRec, tmp_buf );
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+			out_edit ( out_comment_buf, tmp_buf , 2 , 100 );
+			strcat( g_SendRec, tmp_buf);
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+			out_edit ( out_comment_buf, tmp_buf , 3 ,  c_len - 200 );
+			strcat( g_SendRec, tmp_buf );
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+		}
+		else if ( c_len > 300 && c_len <= 400 ) {
+			out_edit ( out_comment_buf, tmp_buf , 1 , 100 );
+			strcat( g_SendRec, tmp_buf );
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+			out_edit ( out_comment_buf, tmp_buf , 2 , 100 );
+			strcat( g_SendRec, tmp_buf);
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+			out_edit ( out_comment_buf, tmp_buf , 3 , 100 );
+			strcat( g_SendRec, tmp_buf );
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+			out_edit ( out_comment_buf, tmp_buf , 4 ,  c_len - 300 );
+			strcat( g_SendRec, tmp_buf );
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+		}
+		else if ( c_len > 400 ) {
+			out_edit ( out_comment_buf, tmp_buf , 1 , 100 );
+			strcat( g_SendRec, tmp_buf );
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+			out_edit ( out_comment_buf, tmp_buf , 2 , 100 );
+			strcat( g_SendRec, tmp_buf);
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+			out_edit ( out_comment_buf, tmp_buf , 3 , 100 );
+			strcat( g_SendRec, tmp_buf );
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+			out_edit ( out_comment_buf, tmp_buf , 4 ,  100 );
+			strcat( g_SendRec, tmp_buf );
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+		}
+
+    }
+    else {
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+		g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+		g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+    }
+
+#if 0
+    /* コメント1 */
+    if (hi_Comment1 != ORA_NULL){
+        if (h_Comment1.len > 100) {
+            strncat( g_SendRec, h_Comment1.arr, 100 );
+            g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+            strncat( g_SendRec, &h_Comment1.arr[100],
+                     (h_Comment1.len - 100) );
+            g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        }
+        else {
+            strncat( g_SendRec, h_Comment1.arr, h_Comment1.len );
+            g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+            g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        }
+    }
+    else {
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+    }
+
+    /* コメント2 */
+    if (hi_Comment2 != ORA_NULL){
+        if (h_Comment2.len > 100) {
+            strncat( g_SendRec, h_Comment2.arr, 100 );
+            g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+            strncat( g_SendRec, &h_Comment2.arr[100],
+                     (h_Comment2.len - 100) );
+            g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        }
+        else {
+            strncat( g_SendRec, h_Comment2.arr, h_Comment2.len );
+            g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+            g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        }
+    }
+    else {
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+    }
+
+#endif
+
+    return( NORMAL );
+}
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   int setIppanTokki( )                                                    */
+/*                                                                           */
+/* Description:                                                              */
+/*   一般履歴特記事項設定                                                    */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   None                                                                    */
+/*                                                                           */
+/* Return Code:                                                              */
+/*        NORMAL   : 正常                                                    */
+/*        ERROR    : SELECT異常                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int setIppanTokki()
+{
+	int rc;
+	int c_len;	/* コメントレングス */
+
+
+	G_POSITION = __LINE__;
+    EXEC SQL SELECT COUNT(*) INTO :h_DATA_COUNT
+            FROM TH_一般履歴
+            WHERE コンタクトID = :h_ContactID
+              AND 枝番 = :h_lEdaNo;
+    if( sqlca.sqlcode < 0 ){
+		sprintf( g_szDtlMsg,
+					"TH_一般履歴 SELECT COUNT エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+		send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        return( ERROR );
+    }
+
+    /* 一般履歴なし */
+    if (h_DATA_COUNT == 0){
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        return( NORMAL );
+    }
+
+
+
+    memset( &h_Comment1, 0x00, sizeof(h_Comment1) );
+    h_Comment1.len = 0;
+    hi_Comment1 = ORA_NULL;
+    memset( &h_Comment2, 0x00, sizeof(h_Comment2) );
+    h_Comment2.len = 0;
+    hi_Comment2 = ORA_NULL;
+
+	/* %03 Change 改行コードをスペース変換 */
+	G_POSITION = __LINE__;
+    EXEC SQL SELECT 
+					REPLACE(REPLACE(REPLACE(コメント1,CHR(13) || CHR(10), ' '),CHR(13), ' '),CHR(10), ' '),
+                    REPLACE(REPLACE(REPLACE(コメント2,CHR(13) || CHR(10), ' '),CHR(13), ' '),CHR(10), ' ')
+            INTO :h_Comment1 :hi_Comment1,
+                 :h_Comment2 :hi_Comment2
+            FROM TH_一般履歴
+            WHERE コンタクトID = :h_ContactID
+              AND 枝番 = :h_lEdaNo
+            ;
+    if( sqlca.sqlcode < 0 ){
+		sprintf( g_szDtlMsg,
+					"TH_一般履歴 SELECT エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+		send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        return( ERROR );
+    }
+
+	/* %03 Add */
+	if ( hi_Comment1 != ORA_NULL ){
+		memset ( comment_buf, 0x00, sizeof(comment_buf) ) ;
+		strcpy ( comment_buf, h_Comment1.arr );
+		strcat ( comment_buf, h_Comment2.arr );
+	
+		rc = tab_to_space ( comment_buf );
+
+		memset ( out_comment_buf, 0x00, sizeof(out_comment_buf) ) ;
+		rc = comment_edit ( comment_buf, out_comment_buf );
+		c_len = (unsigned int)strlen (out_comment_buf);
+
+	}
+
+    /* コメント1 %01 Change */
+    if ( hi_Comment1 != ORA_NULL ){
+        if (c_len <= 100 ) {
+			out_edit ( out_comment_buf, tmp_buf , 1 ,  c_len );
+			strcat( g_SendRec, tmp_buf );
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+		}
+		else if ( c_len > 100 && c_len <= 200 ) {
+			out_edit ( out_comment_buf, tmp_buf , 1 , 100 );
+			strcat( g_SendRec, tmp_buf );
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+			out_edit ( out_comment_buf, tmp_buf , 2 ,  c_len - 200 );
+			strcat( g_SendRec, tmp_buf );
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+		}
+		else if ( c_len > 200 && c_len <= 300 ) {
+			out_edit ( out_comment_buf, tmp_buf , 1 , 100 );
+			strcat( g_SendRec, tmp_buf );
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+			out_edit ( out_comment_buf, tmp_buf , 2 , 100 );
+			strcat( g_SendRec, tmp_buf);
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+			out_edit ( out_comment_buf, tmp_buf , 3 ,  c_len - 200 );
+			strcat( g_SendRec, tmp_buf );
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+		}
+		else if ( c_len > 300 && c_len <= 400 ) {
+			out_edit ( out_comment_buf, tmp_buf , 1 , 100 );
+			strcat( g_SendRec, tmp_buf );
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+			out_edit ( out_comment_buf, tmp_buf , 2 , 100 );
+			strcat( g_SendRec, tmp_buf);
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+			out_edit ( out_comment_buf, tmp_buf , 3 , 100 );
+			strcat( g_SendRec, tmp_buf );
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+			out_edit ( out_comment_buf, tmp_buf , 4 ,  c_len - 300 );
+			strcat( g_SendRec, tmp_buf );
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+		}
+		else if ( c_len > 400 ) {
+			out_edit ( out_comment_buf, tmp_buf , 1 , 100 );
+			strcat( g_SendRec, tmp_buf );
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+			out_edit ( out_comment_buf, tmp_buf , 2 , 100 );
+			strcat( g_SendRec, tmp_buf);
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+			out_edit ( out_comment_buf, tmp_buf , 3 , 100 );
+			strcat( g_SendRec, tmp_buf );
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+			out_edit ( out_comment_buf, tmp_buf , 4 ,  100 );
+			strcat( g_SendRec, tmp_buf );
+			g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+		}
+
+    }
+    else {
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+		g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+		g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+    }
+
+#if 0
+    if (hi_Comment1 != ORA_NULL){
+        if (h_Comment1.len > 100) {
+            strncat( g_SendRec, h_Comment1.arr, 100 );
+            g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+            strncat( g_SendRec, &h_Comment1.arr[100],
+                     (h_Comment1.len - 100) );
+            g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        }
+        else {
+            strncat( g_SendRec, h_Comment1.arr, h_Comment1.len );
+            g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+            g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        }
+    }
+    else {
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+    }
+
+    /* コメント2 */
+    if (hi_Comment2 != ORA_NULL){
+        if (h_Comment2.len > 100) {
+            strncat( g_SendRec, h_Comment2.arr, 100 );
+            g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+            strncat( g_SendRec, &h_Comment2.arr[100],
+                     (h_Comment2.len - 100) );
+            g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        }
+        else {
+            strncat( g_SendRec, h_Comment2.arr, h_Comment2.len );
+            g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+            g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        }
+    }
+    else {
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+        g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+    }
+#endif
+
+
+    return( NORMAL );
+}
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   int setService()                                                        */
+/*                                                                           */
+/* Description:                                                              */
+/*   サービス種別名設定                                                      */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   None                                                                    */
+/*                                                                           */
+/* Return Code:                                                              */
+/*        NORMAL   : 正常                                                    */
+/*        ERROR    : SELECT異常                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int setService()
+{
+
+    int rc = NORMAL;
+
+    /* インバウンド */
+    if ( memcmp(h_CampaignID, CONTACT_LOG_S_INB, 4) == 0 ){
+        if ( hi_ServiceType != ORA_NULL ){
+            memset( &h_ServiceName, 0x00, sizeof(h_ServiceName) );
+            h_ServiceName.len = 0;
+            hi_ServiceName = ORA_NULL;
+
+            G_POSITION = __LINE__;
+			EXEC SQL SELECT サービス種別名 INTO :h_ServiceName :hi_ServiceName
+                    FROM TM_サービス種別
+                    WHERE サービス種別ID = :h_ServiceType
+                    ;
+            if( sqlca.sqlcode < 0 ){
+				sprintf( g_szDtlMsg,
+					"TM_サービス種別 SELECT エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+				send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+                return( ERROR );
+            }
+            if (h_ServiceName.len > 30){
+                strncat( g_SendRec, h_ServiceName.arr, 30 );
+            }
+            else {
+                strncat( g_SendRec, h_ServiceName.arr, h_ServiceName.len );
+            }
+        }
+    }
+    /* アウトバウンド */
+    else {
+        /* コール状況＝コンタクト */
+        if ( memcmp( h_CallStatus, CONTACT_LOG_S_CALL_CON, 4) == 0 ){
+            strncpy( h_KomokuID, CONTACT_LOG_S_CALLD, 4 );
+
+            memset( &h_KaiwaD, 0x00, sizeof(h_KaiwaD) );
+            h_KaiwaD.len = 0;
+            hi_KaiwaD = ORA_NULL;
+
+			G_POSITION = __LINE__;
+            EXEC SQL SELECT KM.会話明細名 INTO :h_KaiwaD :hi_KaiwaD
+                    FROM TH_セールス履歴 SH, TM_会話明細 KM
+                    WHERE SH.コンタクトID = :h_ContactID
+                      AND SH.枝番 = :h_lEdaNo
+                      AND KM.会話項目ID = :h_KomokuID
+                      AND SH.顧客反応 = KM.会話明細ID
+                    ;
+            if( sqlca.sqlcode < 0 ){
+				sprintf( g_szDtlMsg,
+					"TH_セールス履歴 SELECT エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+				send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+                return( ERROR );
+            }
+            if (hi_KaiwaD != ORA_NULL){
+                strncat( g_SendRec, h_KaiwaD.arr, h_KaiwaD.len );
+            }
+        }
+        else {
+
+            /* 会話項目ID 設定 */
+            strncpy( h_KomokuID, CONTACT_LOG_S_CALL, 4 );
+
+            /* 会話明細ID 設定 */
+            strncpy( h_MeisaiID, h_CallStatus, 4 );
+            rc = getMeisaiName();
+            if (rc == NORMAL){
+                strncat( g_SendRec, h_KaiwaD.arr, h_KaiwaD.len );
+            }
+        }
+    }
+
+    g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+    return( NORMAL );
+}
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   int setKosho( )                                                         */
+/*                                                                           */
+/* Description:                                                              */
+/*   交渉相手設定                                                            */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   None                                                                    */
+/*                                                                           */
+/* Return Code:                                                              */
+/*        NORMAL   : 正常                                                    */
+/*        ERROR    : SELECT異常                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int setKosho()
+{
+
+    int rc = NORMAL;
+
+    if (hi_TradeTarget != ORA_NULL){
+
+        /* 会話項目ID 設定 */
+        strncpy( h_KomokuID, CONTACT_LOG_S_KOSHO, 4 );
+
+        /* 会話明細ID 設定 */
+        strncpy( h_MeisaiID, h_TradeTarget, 4 );
+
+        /* 会話項目明細名 取得 */
+        rc = getMeisaiName();
+        if (rc == NORMAL){
+            strncat( g_SendRec, h_KaiwaD.arr, h_KaiwaD.len );
+        }
+    }
+
+    g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+    return( rc );
+}
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   int setCampaignName( )                                                  */
+/*                                                                           */
+/* Description:                                                              */
+/*   キャンペーン名設定                                                      */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  --------------------------------------- */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   None                                                                    */
+/*                                                                           */
+/* Return Code:                                                              */
+/*        NORMAL         : 正常                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int setCampaignName()
+{
+
+    /* インバウンド */
+    if ( memcmp( h_CampaignID, CONTACT_LOG_S_INB, 4 ) == 0 ) {
+        /* 種類＝取引 */
+        if ( memcmp( h_Type, CONTACT_LOG_S_TYPE_TB, 2 ) == 0 ) {
+            strcat( g_SendRec, CONTACT_LOG_S_IN_TB );
+        }
+        else {
+            /* 外部データ区分あり */
+            if (hi_ExternalType != ORA_NULL) {
+                /* HP資料請求 */
+                if ( memcmp( h_ExternalType, CONTACT_LOG_S_HP, 1) == 0 ) {
+                    strcat( g_SendRec, CONTACT_LOG_S_IN_HP );
+                }
+                /* 自動音声資料請求 */
+                else if ( memcmp( h_ExternalType, CONTACT_LOG_S_NU, 1) == 0 ) {
+                    strcat( g_SendRec, CONTACT_LOG_S_IN_NU );
+                }
+				/* %05 Add */
+				else {
+					/* TMインバウンド */
+					strcat( g_SendRec, CONTACT_LOG_S_IN_TM );
+				}
+
+            }
+			else {
+                /* TMインバウンド */
+                strcat( g_SendRec, CONTACT_LOG_S_IN_TM );
+            }
+        }
+    }
+    /*アウトバウンドの場合は OUT_+キャンペーン名 */
+    else {
+        if (hi_CampaignName != ORA_NULL) {
+            strcat( g_SendRec, CONTACT_LOG_S_OUT );
+			rtrim ( h_CampaignName );			/* Add %04 */	
+            strcat( g_SendRec, h_CampaignName );
+        }
+		else {
+			strcat( g_SendRec, CONTACT_LOG_S_OUT ); /* Add %05 */	
+		}
+    }
+    g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+    return( NORMAL );
+
+}
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   int setCustomerNo( )                                                    */
+/*                                                                           */
+/* Description:                                                              */
+/*   顧客管理番号設定                                                        */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  --------------------------------------- */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   None                                                                    */
+/*                                                                           */
+/* Return Code:                                                              */
+/*        NORMAL   : 正常                                                    */
+/*        ERROR    : SELECT異常                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int setCustomerNo()
+{
+
+	/* 外部データ取込み履歴 */
+    if ( memcmp( &h_ContactID[12], "E", 1) == 0 ){ /* %07 Change  */
+        /* YYMMDDhhmmss + E + 999999  ->  YYMMDD + 999999 */
+        strncat( g_SendRec, &h_ContactID[0], 6 );
+        strncat( g_SendRec, &h_ContactID[13], 6 );
+       /* sprintf( &g_SendRec[ (unsigned int)strlen(g_SendRec) ], "%1d", h_lEdaNo );*/
+    }
+    else if ( memcmp(h_Type, CONTACT_LOG_S_TYPE_EI, 2) == 0 ){ /* %06 Change */
+        /* YYYYMMDDhhmmss + E + 9999999  -> YYMMDD + 999999 */
+        strncat( g_SendRec, &h_ContactID[0], 6 );
+        strncat( g_SendRec, &h_ContactID[13], 6 );
+    }
+    else {
+        /* YYYYMMDDhhmmss + XXX + 99999  -> YYMMDDhhmm + 99 */
+        strncat( g_SendRec, &h_ContactID[0], 10 );
+        sprintf( &g_SendRec[ (unsigned int)strlen(g_SendRec) ], "%02d", h_lEdaNo );
+    }
+
+    g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
+
+    return( NORMAL );
+
+}
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   int getMeisaiName( )                                                    */
+/*                                                                           */
+/* Description:                                                              */
+/*   会話項目明細名取得                                                      */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   None                                                                    */
+/*                                                                           */
+/* Return Code:                                                              */
+/*        NORMAL: 正常                                                       */
+/*        ERROR : データ不正                                                 */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int getMeisaiName()
+{
+
+
+    memset( &h_KaiwaD, 0x00, sizeof(h_KaiwaD) );
+    h_KaiwaD.len = 0;
+    hi_KaiwaD = ORA_NULL;
+
+	
+	G_POSITION = __LINE__;
+    EXEC SQL SELECT 会話明細名 INTO :h_KaiwaD :hi_KaiwaD
+            FROM TM_会話明細
+            WHERE 会話項目ID = :h_KomokuID
+              AND 会話明細ID = :h_MeisaiID
+            ;
+    if( sqlca.sqlcode < 0 ){
+		sprintf( g_szDtlMsg,
+				"TM_会話明細 SELECT エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+			send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        return( ERROR );
+    }
+
+    return( NORMAL );
+}
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*     finalize( int rc )                                                    */
+/* Made by:                                                                  */
+/* Description:終了処理                                                      */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* rc              int           i   リターンコード                          */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static void finalize( int rc )
+{
+
+    /* ファイルのクローズ */
+	if ( file_open_flag == 1 ) {
+		fclose( g_pfSendFile );
+	}
+    
+    exit( rc );
+
+}
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*     commit( void )                                                        */
+/* Made by:                                                                  */
+/* Description:ＤＢのコミット                                                */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/*  g_szDtlMsg      *char         O    事象詳細文字列                        */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL : 正常                                                          */
+/*    ERROR  : コミットエラー（システムエラー）                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int commit( VOID )
+{
+
+    /* ＤＢのコミット */
+	G_POSITION = __LINE__;
+    EXEC SQL COMMIT;
+    if (sqlca.sqlcode < 0) {
+        sprintf(g_szDtlMsg,
+                "ＤＢのコミットに失敗しました。(CODE=%ld)",
+                sqlca.sqlcode);
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+
+
+    return NORMAL;
+}
+
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*     rollback( void )                                                      */
+/* Made by:                                                                  */
+/* Description:ＤＢのロールバック                                            */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL : 正常                                                          */
+/*    ERROR  : ロールバックエラー（システムエラー）                          */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int rollback( )
+{
+    
+	/* ＤＢのロールバック */
+	G_POSITION = __LINE__;
+    EXEC SQL ROLLBACK WORK;
+    if (sqlca.sqlcode < 0) {
+        sprintf(g_szDtlMsg,
+                "ＤＢのロールバックに失敗しました。(CODE=%ld)",
+                sqlca.sqlcode);
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+
+    return NORMAL;
+}
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   update_previous_date( const char *process_id )                          */
+/*                                                                           */
+/* Description:                                                              */
+/*   前回抽出日を取得                                                        */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length            I/O    Content                     */
+/* --------------  ---------------------  ---  -------------------------     */
+/* process_id      const char*            i    処理ID                        */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   TX_ログアップロード情報                                                 */
+/*                                                                           */
+/* Return Code:                                                              */
+/*   NORMAL             : 正常                                               */
+/*   ERROR              : 異常                                               */
+/*                                                                           */
+/*****************************************************************************/
+int update_previous_date ( const char *process_id )
+{
+
+    /* TX_ログアップロード情報から前回抽出日を取得 */
+	memset ( h_process_id, 0x0, sizeof(h_process_id));
+	strcpy ( h_process_id , process_id );
+
+	G_POSITION = __LINE__;
+	EXEC SQL UPDATE TX_ログアップロード情報
+		SET 処理開始日 = TO_DATE (:h_TO_TS,'YYYYMMDD HH24MISS')
+			WHERE
+				処理ID = :h_process_id;
+
+	if ( sqlca.sqlcode != 0 ){
+        sprintf( g_szDtlMsg,
+                 "[処理ID=%s]TX_ログアップロード情報の処理開始日の更新に失敗しました。(sqlca.sqlcode=%d)",
+                  h_process_id, sqlca.sqlcode );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+		send_err ( m$sql_statment, sqlca.sqlcode, "UPDATE TX_ログアップロード情報", NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+
+
+	return ( NORMAL );
+
+}
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   get_previous_date( const char *process_id )                             */
+/*                                                                           */
+/* Description:                                                              */
+/*   前回抽出日を取得                                                        */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length            I/O    Content                     */
+/* --------------  ---------------------  ---  -------------------------     */
+/* process_id      const char*            i    処理ID                        */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   TX_ログアップロード情報                                                 */
+/*                                                                           */
+/* Return Code:                                                              */
+/*   NORMAL             : 正常                                               */
+/*   ERROR              : 異常                                               */
+/*                                                                           */
+/*****************************************************************************/
+int get_previous_date ( const char *process_id )
+{
+
+    /* TX_ログアップロード情報から前回抽出日を取得 */
+	memset ( h_process_id, 0x0, sizeof(h_process_id));
+	strcpy ( h_process_id , process_id );
+
+	G_POSITION = __LINE__;
+    EXEC SQL SELECT TO_CHAR(処理開始日, 'YYYYMMDD HH24MISS')
+				INTO :h_FROM_TS 
+			FROM TX_ログアップロード情報
+			WHERE
+				処理ID = :h_process_id;
+
+	if ( sqlca.sqlcode != 0 ){
+        sprintf( g_szDtlMsg,
+                 "[処理ID=%s]TX_ログアップロード情報の検索に失敗しました。(sqlca.sqlcode=%d)",
+                  h_process_id, sqlca.sqlcode );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+		send_err ( m$sql_statment, sqlca.sqlcode, "SELECT TX_ログアップロード情報", NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+
+
+	return ( NORMAL );
+
+}
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   makeExtractionMessage( char *from , char *to )                          */
+/*                                                                           */
+/* Description:                                                              */
+/*   抽出条件をメッセージ出力                                                */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length            I/O    Content                     */
+/* --------------  ---------------------  ---  -------------------------     */
+/* from            char*                  i    開始日付                      */
+/* to              char*                  i    終了日付                      */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   Non                                                                     */
+/*                                                                           */
+/* Return Code:                                                              */
+/*   None                                                                    */
+/*                                                                           */
+/*****************************************************************************/
+void makeExtractionMessage ( char *from , char *to )
+{
+	char from_date [32];
+	char to_date   [32];
+
+	memset ( from_date , 0x0, sizeof(from_date) );
+	memset ( to_date   , 0x0, sizeof(to_date) );
+
+	editDate ( 1, from , from_date );
+	editDate ( 1, to , to_date );
+
+
+	sprintf ( g_szDtlMsg, "[抽出条件] %s から %s までの抽出を実行します", from_date , to_date );
+
+	send_err ( m$message1, 0, g_szDtlMsg, NULL, NULL, G_STATION);
+
+
+}
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   editDate ( int mode, char *src, char *dest )                            */
+/*                                                                           */
+/* Description:                                                              */
+/*   日付を編集                                                              */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length            I/O    Content                     */
+/* --------------  ---------------------  ---  -------------------------     */
+/* mode            int                    i    編集モード(最初は1のみ)       */
+/* src             char*                  i    編集元バッファ                */
+/* dest            char*                  i/o  編集後バッファ                */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   Non                                                                     */
+/*                                                                           */
+/* Return Code:                                                              */
+/*   None                                                                    */
+/*                                                                           */
+/*****************************************************************************/
+void editDate ( int mode, char *src, char *dest ) 
+{
+
+	switch ( mode ) {
+		case 1: /* YYYYMMDD HH24MISS → YYYY/MM/DD HH24:MI:SS */
+			/* 年月日に / を挿入 */
+			memcpy ( dest , &src[0], 4 );
+			dest[4] = '/';
+			strncat ( dest , &src[4], 2 );
+			dest[7] = '/';
+			strncat ( dest , &src[6], 2 );
+			dest[10] = ' ';
+
+			/* 時分秒に : を挿入 */
+			strncat ( dest , &src[9], 2 );
+			dest[13] = ':';
+			strncat ( dest , &src[11], 2 );
+			dest[16] = ':';
+			strncat ( dest , &src[13], 2 );
+			
+			break;
+
+		default:
+			break;
+	}
+
+}
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   comment_edit ( char *ibuf, char *out_buf )                              */
+/*                                                                           */
+/* Description:                                                              */
+/*   コメントを編集  (区切りバイトで全角文字が入らないよう調整)              */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length            I/O    Content                     */
+/* --------------  ---------------------  ---  -------------------------     */
+/* ibuf             char*                  i    編集元バッファ               */
+/* obuf             char*                  i/o  編集後バッファ               */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   Non                                                                     */
+/*                                                                           */
+/* Return Code:                                                              */
+/*   NORMAL                                                                  */
+/*                                                                           */
+/*****************************************************************************/
+#include <locale.h>
+#define SPLIT_LEN 100
+
+
+int comment_edit ( in_buf, out_buf )
+unsigned char *in_buf;
+unsigned char *out_buf;
+{
+	int i,j;
+	int len;
+	int length;
+
+	setlocale( LC_CTYPE, "jpn" );
+
+	len = (unsigned int )strlen ( in_buf );
+
+	for ( i = 0,j=0; i < len;  ) {
+		/* 次の文字バイト数取得 */
+		length = mblen( &in_buf[i], MB_CUR_MAX );
+
+		/* 区切り個所判定 */
+		if ( j == (SPLIT_LEN*1  -1 ) || j == (SPLIT_LEN*2 - 1 ) ||
+			 j == (SPLIT_LEN*3 - 1 ) || j == (SPLIT_LEN*4 - 1 ) ) {
+			/* 全角 */
+			if ( length == 2 ) {
+				out_buf[j] = ' ';
+				j ++;
+			}
+			/* 半角 */
+			else {
+				out_buf[j] = in_buf[i];
+				j++;
+				i++;
+			}
+		}
+		else {
+			/* 全角 */
+			if ( length == 2 ) {
+				memcpy ( &out_buf[j] , &in_buf[i], 2 );
+				
+				j += length;
+				i += length;
+			}
+			/* 半角 */
+			else {
+				out_buf[j] = in_buf[i];
+				j++;
+				i++;
+			}
+		}
+	}
+	
+
+	return ( 0 );
+
+}
+
+int 
+tab_to_space ( char *buf )
+{
+	int len;
+	int i;
+
+	len = (unsigned int)strlen ( buf );
+
+	for ( i = 0; i < len ; i++ ) {
+		if ( buf[i] == 0x09 ) {
+			buf[i] = ' ';
+		}
+	}
+
+	return ( 0 );
+
+}
+void out_edit ( char *i_buf, char *o_buf ,int mode, int size )
+{
+	memset ( o_buf , 0x0, sizeof(tmp_buf));
+
+	switch ( mode ) {
+		case 1:
+			strncat ( o_buf,  &i_buf[0],   size );
+			break;
+
+		case 2:
+			strncat ( o_buf,  &i_buf[100], size );
+			break;
+		
+		case 3:
+			strncat ( o_buf,  &i_buf[200], size );
+			break;
+		
+		case 4:
+			strncat ( o_buf,  &i_buf[300], size );
+			break;
+
+		default:
+			break;
+	}
+
+	
+	rtrim( o_buf ); 
+	
+	/*printf("(%s)\n",o_buf);*/
+
+}
+
+
