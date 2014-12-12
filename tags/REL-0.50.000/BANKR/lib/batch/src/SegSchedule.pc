@@ -1,0 +1,2176 @@
+/*==========================================================================*/
+/* Copyright　Information Services International-Dentsu, Ltd.   　          */
+/*==========================================================================*/
+/*                                                                          */
+/* SYSTEM           : BANK・R－CC                                           */
+/*                                                                          */
+/* PROGRAM NAME     : 夜間SEG条件実行                                       */
+/*                                                                          */
+/* MODULE NAME      : SegSchedule                                           */
+/*                                                                          */
+/* FUNCTION         : スケジューリングされている                            */
+/*                    セグメンテーション条件を順次実行する。                */
+/*                                                                          */
+/* CALLING MODULE   : Main Module.                                          */
+/*                                                                          */
+/* CALLED MODULE    : send_err, errhandler, db_connect                      */
+/*                                                                          */
+/* ENTRY POint      : Main Module.                                          */
+/*                                                                          */
+/* INPUT            : argv[1]・・・処理区分                                 */
+/*                                   D：日次                                */
+/*                                   W：週次                                */
+/*                                   M：月次                                */
+/*                                                                          */
+/* EXIT             : 正常終了       ・・・NORMAL(0)                        */
+/*                    異常終了       ・・・ERROR (9)                        */
+/*                                                                          */
+/* Mod   yy/mm/dd   Coder           Comment                                 */
+/*-----+----------+-------------+-------------------------------------------*/
+/* %00 | 09/06/12 | K.Miyahara  | First Edition.                            */
+/* %01 | 10/04/15 | K.Miyahara  | 各引数の処理対象サイクルの変更            */
+/*==========================================================================*/
+/*--------------------------------------------------------------------------*/
+/* Standard include specification                                           */
+/*--------------------------------------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdarg.h>
+#include <errno.h>
+#include <time.h>
+
+/*--------------------------------------------------------------------------*/
+/* User defined include specification                                       */
+/*--------------------------------------------------------------------------*/
+#include "common.h"
+#include "msg.h"
+#include "batchcommon.h"
+
+EXEC SQL INCLUDE mbproc.h;
+EXEC SQL INCLUDE TC_CampaignCustomer.h;
+EXEC SQL INCLUDE TM_SEGImmobilizationConditiont.h;
+EXEC SQL INCLUDE TS_ExtractionCondition.h;
+EXEC SQL INCLUDE TS_TargetFileInfo.h;
+EXEC SQL INCLUDE TS_TaskManagement.h;
+
+/*--------------------------------------------------------------------------*/
+/*							DEFINE STATEMENTS								*/
+/*--------------------------------------------------------------------------*/
+
+/*--------------------------------------------------------------------------*/
+/*							EXTERNAL DECLARES								*/
+/*--------------------------------------------------------------------------*/
+EXEC SQL BEGIN DECLARE SECTION;
+	int		work_count;						/* ワークカウンター */
+	int		call_list_insert_count;			/* コールリスト投入件数 */
+	int		ebm_total_count;				/* EBMタスク：データ件数 */
+	int		ebm_error_count;				/* EBMタスク：異常処理件数 */
+	int		ebm_success_count;				/* EBMタスク：正常処理件数 */
+	char	sqlcmd[4096];					/* SQL文 */
+	char	seg_sql[15360];					/* 条件文 */
+	char	seg_sql_select[3072];			/* 条件文:カラム */
+	char	seg_sql_from[3072];				/* 条件文:テーブル */
+	char	seg_sql_where[9216];			/* 条件文:条件 */
+	char	extraction_table_name[30];		/* 抽出テーブル名 */
+	char	call_list_name[30];				/* コールリスト名 */
+	char	timestamp[15+1];				/* タイムスタンプ */
+	char	call_branch_num[5+1];			/* コールリスト：店番 */
+	char	call_cif_num[10+1];				/* コールリスト：CIFNO */
+	char	call_household_num[13+1];		/* コールリスト：世帯番号 */
+	char	call_call_flag[1+1];			/* コールリスト：コールフラグ */
+	char	idx1_column1[30];				/* インデックス1用カラム1(その他抽出用) */
+	char	idx1_column2[30];				/* インデックス1用カラム2(その他抽出用) */
+	char	idx2_column[30];				/* インデックス2用カラム(その他抽出用) */
+	char	where_maturity_day[512];		/* 満期日条件 */
+EXEC SQL END DECLARE SECTION;
+
+/*--------------------------------------------------------------------------*/
+/*							STRUCT DECLARATIONS								*/
+/*--------------------------------------------------------------------------*/
+
+/*--------------------------------------------------------------------------*/
+/*							SUBROUTNE DEFINITION							*/
+/*--------------------------------------------------------------------------*/
+extern int send_err();
+extern int db_connect();
+extern void errhandler();
+
+extern int get_start_timestamp();
+extern int string_replace();
+extern char *string_shift();
+extern int make_condition();
+extern int create_extraction_table();
+extern int create_intermediate_table();
+extern int target_file_registration();
+extern int create_call_list();
+
+/****************************************************************************/
+/*																			*/
+/*							PROCEDURE DIVISION								*/
+/*																			*/
+/****************************************************************************/
+
+/*--------------------------------------------------------------------------*/
+/*                              MAIN ROUTINE                                */
+/*--------------------------------------------------------------------------*/
+main (argc, argv)
+int     argc;
+char    *argv[];
+{
+/*--------------------------------------------------------------------------*/
+/*                      LOCAL VARIABLE DECLARATIONS                         */
+/*--------------------------------------------------------------------------*/
+	char	*homedir;					/* ホームディレクトリ */
+	int		exit_code;					/* 終了コード */
+	int		return_code;				/* リターンコード */
+
+	int		total_task_count;			/* タスク件数 */
+	int		success_task_count;			/* 正常終了タスク件数 */
+	int		error_task_count;			/* 異常終了タスク件数 */
+
+	int		db_connect_flag;			/* ＤＢ接続フラグ */
+	int		cur1_open_flag;				/* カーソル１オープンフラグ */
+
+	char	buff[512];					/* 文字列バッファ */
+	char	cmd_work[128];				/* コマンドワーク */
+	char	start_date[32];				/* 処理開始日時 */
+	char	start_date2[32];			/* 処理開始日時２(各タスク用) */
+	char	cycle[2];					/* サイクル */
+
+/*==========================================================================*/
+/*      INITIALIZATION                                                      */
+/*==========================================================================*/
+
+	/*-----------------------------*/
+	/* Initialize environment      */
+	/*-----------------------------*/
+	exit_code = NORMAL;
+	return_code = 0;
+
+	total_task_count = 0;
+	success_task_count = 0;
+	error_task_count = 0;
+
+	db_connect_flag = 0;
+	cur1_open_flag = 0;
+
+	memset( buff, 0x00, sizeof(buff) );
+	memset( cmd_work, 0x00, sizeof(cmd_work) );
+	memset( start_date, 0x00, sizeof(start_date) );
+	memset( start_date2, 0x00, sizeof(start_date2) );
+	memset( cycle, 0x00, sizeof(cycle) );
+
+	/* 引数チェック前のバッチ処理結果登録用に'D'で初期化 */
+	strcpy( cycle, "D" );
+
+	/*-----------------------------*/
+	/* Print process start message */
+	/*-----------------------------*/
+    strcpy( G_STATION, "SegSchedule" );
+    send_err( m$start_process, 0, "夜間SEG条件実行", NULL, NULL, G_STATION );
+
+	/* 処理開始日時取得 */
+	get_start_timestamp( start_date );
+
+	/*-----------------------------*/
+	/* Get environment variable    */
+	/*-----------------------------*/
+	if( ( homedir = (char *)getenv( "HOME" ) ) == NULL ) {
+		send_err( m$getenv, -1, "HOME", NULL, NULL, G_STATION );
+		exit_code = ERROR;
+		goto ENDPROC;
+	}
+
+	/*-----------------------------*/
+	/* Check parameter             */
+	/*-----------------------------*/
+	if( argc != 2 ) {
+		send_err( m$invalid_parameter, -1, NULL, NULL, NULL, G_STATION );
+		exit_code = ERROR;
+		goto ENDPROC;
+	}
+
+	strcpy( cycle, argv[1] );
+
+	/* バッチ処理結果登録(処理開始) */
+	sprintf( cmd_work, "BatchResultEntry 1 %s 夜間SEG条件実行 3 %s 0 0 0", start_date, cycle );
+    send_err( m$message1, 0, cmd_work, NULL, NULL, G_STATION );
+	return_code = system( cmd_work );
+	if( return_code != 0 ){
+		send_err( m$system, return_code, cmd_work, NULL, NULL, G_STATION );
+	}
+
+    /*-----------------------------*/
+    /* Setup error handler routine */
+    /*-----------------------------*/
+    EXEC SQL WHENEVER SQLERROR DO errhandler();
+
+	/*-----------------------------*/
+	/* Connect to database         */
+	/*-----------------------------*/
+	G_POSITION = __LINE__;
+	return_code = db_connect();
+	if( return_code != 0 ) {
+		send_err( m$db_connect, -1, NULL, NULL, NULL, G_STATION );
+		exit_code = ERROR;
+		goto ENDPROC;
+    }
+
+	db_connect_flag = 1;
+
+    /*======================================================================*/
+    /*                      メ　イ　ン　処　理                              */
+    /*======================================================================*/
+
+	/*----------------------------------------------------------------------*/
+	/* TS_タスク管理からスケジュール情報取得                                */
+	/*----------------------------------------------------------------------*/
+	memset( sqlcmd, 0x00, sizeof(sqlcmd) );
+
+	/* 動的SQL作成 */
+	strcpy( sqlcmd, "SELECT" );
+	strcat( sqlcmd, " 処理区分," );
+	strcat( sqlcmd, " タスク名," );
+	strcat( sqlcmd, " 処理時間," );
+	strcat( sqlcmd, " 適用開始日," );
+	strcat( sqlcmd, " 適用終了日," );
+	strcat( sqlcmd, " 一時保留区分," );
+	strcat( sqlcmd, " センタID," );
+	strcat( sqlcmd, " キャンペーンID," );
+	strcat( sqlcmd, " 対象ファイル名," );
+	strcat( sqlcmd, " 親対象ファイル名," );
+	strcat( sqlcmd, " 元ファイル区分," );
+	strcat( sqlcmd, " データ区分," );
+	strcat( sqlcmd, " 条件名," );
+	strcat( sqlcmd, " メモ1," );
+	strcat( sqlcmd, " メモ2," );
+	strcat( sqlcmd, " メモ3," );
+	strcat( sqlcmd, " メモ4," );
+	strcat( sqlcmd, " CMP対象者除外 " );
+	strcat( sqlcmd, "FROM" );
+	strcat( sqlcmd, " TS_タスク管理 " );
+	strcat( sqlcmd, "WHERE" );
+	if( strcmp( cycle, "M" ) == 0 ){
+		strcat( sqlcmd, " サイクル = '1' AND" );
+	}
+	else if( strcmp( cycle, "W" ) == 0 ){
+		strcat( sqlcmd, " サイクル = '2' AND" );
+	}
+	else{
+		strcat( sqlcmd, " サイクル = '3' AND" );
+	}
+	strcat( sqlcmd, " TO_DATE( 適用開始日, 'YYYY/MM/DD' ) <= TO_DATE( SYSDATE, 'YYYY/MM/DD' ) AND" );
+	strcat( sqlcmd, " TO_DATE( 適用終了日, 'YYYY/MM/DD' ) >= TO_DATE( SYSDATE, 'YYYY/MM/DD' ) AND" );
+	strcat( sqlcmd, " 一時保留区分 != '1'" );
+
+    G_POSITION = __LINE__;
+    EXEC SQL PREPARE sql1 FROM :sqlcmd ;
+    if ( sqlca.sqlcode < 0 ) {
+        send_err( m$sql_statment, 0, "PREPARE sql", NULL, NULL, G_STATION );
+        exit_code = ERROR ;
+        goto ENDPROC ;
+    }
+
+    G_POSITION = __LINE__;
+    EXEC SQL DECLARE cur1 CURSOR FOR sql1;
+    if ( sqlca.sqlcode < 0 ) {
+        send_err( m$sql_statment, 0, "DECLARE cur1", NULL, NULL, G_STATION );
+        exit_code = ERROR ;
+        goto ENDPROC ;
+    }
+
+	G_POSITION = __LINE__;
+	EXEC SQL OPEN cur1;
+    if ( sqlca.sqlcode < 0 ) {
+        send_err( m$sql_statment, 0, "OPEN cur1", NULL, NULL, G_STATION );
+        exit_code = ERROR ;
+        goto ENDPROC ;
+    }
+
+	cur1_open_flag = 1;
+
+	while( 1 ){
+		/* ホスト変数初期化 */
+		memset( TSTM_processing_division, 0x00, sizeof(TSTM_processing_division) );
+		memset( TSTM_task_name.arr, 0x00, sizeof(TSTM_task_name.arr) );
+		TSTM_processing_time = 0;
+		memset( TSTM_application_start_date.arr, 0x00, sizeof(TSTM_application_start_date.arr) );
+		memset( TSTM_application_end_date.arr, 0x00, sizeof(TSTM_application_end_date.arr) );
+		memset( TSTM_temporary_reservation_division, 0x00, sizeof(TSTM_temporary_reservation_division) );
+		memset( TSTM_center_id, 0x00, sizeof(TSTM_center_id) );
+		memset( TSTM_campaign_id, 0x00, sizeof(TSTM_campaign_id) );
+		memset( TSTM_target_file_name.arr, 0x00, sizeof(TSTM_target_file_name.arr) );
+		memset( TSTM_parent_target_file_name.arr, 0x00, sizeof(TSTM_parent_target_file_name.arr) );
+		memset( TSTM_former_file_division, 0x00, sizeof(TSTM_former_file_division) );
+		memset( TSTM_data_division, 0x00, sizeof(TSTM_data_division) );
+		memset( TSTM_condition_name.arr, 0x00, sizeof(TSTM_condition_name.arr) );
+		memset( TSTM_memo1.arr, 0x00, sizeof(TSTM_memo1.arr) );
+		memset( TSTM_memo2.arr, 0x00, sizeof(TSTM_memo2.arr) );
+		memset( TSTM_memo3.arr, 0x00, sizeof(TSTM_memo3.arr) );
+		memset( TSTM_memo4.arr, 0x00, sizeof(TSTM_memo4.arr) );
+		memset( TSTM_cmp_object_person_exclusion, 0x00, sizeof(TSTM_cmp_object_person_exclusion) );
+
+        G_POSITION = __LINE__;
+        EXEC SQL FETCH cur1 INTO 
+                :TSTM_processing_division				:TSTMi_processing_division,
+                :TSTM_task_name							:TSTMi_task_name,
+                :TSTM_processing_time					:TSTMi_processing_time,
+				:TSTM_application_start_date			:TSTMi_application_start_date,
+				:TSTM_application_end_date				:TSTMi_application_end_date,
+				:TSTM_temporary_reservation_division	:TSTMi_temporary_reservation_division,
+				:TSTM_center_id							:TSTMi_center_id,
+				:TSTM_campaign_id						:TSTMi_campaign_id,
+				:TSTM_target_file_name					:TSTMi_target_file_name,
+				:TSTM_parent_target_file_name			:TSTMi_parent_target_file_name,
+				:TSTM_former_file_division				:TSTMi_former_file_division,
+				:TSTM_data_division						:TSTMi_data_division,
+				:TSTM_condition_name					:TSTMi_condition_name,
+				:TSTM_memo1								:TSTMi_memo1,
+				:TSTM_memo2								:TSTMi_memo2,
+				:TSTM_memo3								:TSTMi_memo3,
+				:TSTM_memo4								:TSTMi_memo4,
+				:TSTM_cmp_object_person_exclusion		:TSTMi_cmp_object_person_exclusion
+            ;
+        if( sqlca.sqlcode < 0 ) {
+        	send_err( m$sql_statment, 0, "FETCH cur1", NULL, NULL, G_STATION );
+        	exit_code = ERROR ;
+        	goto ENDPROC ;
+        }
+
+        if( sqlca.sqlcode == ORA_NOF ) {
+            break;
+        }
+
+		/* タスク件数インクリメント */
+		total_task_count++;
+
+		/*----------------------------------------------------------------------*/
+		/* 各タスクの開始処理					                                */
+		/*----------------------------------------------------------------------*/
+		/* 開始メッセージ(各タスクの処理開始) */
+		memset( buff, 0x00, sizeof(buff) );
+		sprintf( buff, "【%s】タスクの処理を開始します．" ,TSTM_task_name.arr );
+		send_err( m$message1, 0, buff, NULL, NULL, G_STATION );
+
+		/* 処理開始日時取得(各タスク用) */
+		memset( start_date2, 0x00, sizeof(start_date2) );
+		get_start_timestamp( start_date2 );
+
+		/* バッチ処理結果登録(各タスクの処理開始) */
+		sprintf( cmd_work, "BatchResultEntry 1 %s %s %s %s 0 0 0", start_date2, TSTM_task_name.arr, TSTM_processing_division, cycle );
+		send_err( m$message1, 0, cmd_work, NULL, NULL, G_STATION );
+		return_code = system( cmd_work );
+		if( return_code != 0 ){
+			send_err( m$system, return_code, cmd_work, NULL, NULL, G_STATION );
+		}
+
+		/*----------------------------------------------------------------------*/
+		/* TS_抽出条件より条件文組み立て		                                */
+		/*----------------------------------------------------------------------*/
+		/* 条件文初期化 */
+		memset( seg_sql_select, 0x00, sizeof(seg_sql_select) );
+		memset( seg_sql_from, 0x00, sizeof(seg_sql_from) );
+		memset( seg_sql_where, 0x00, sizeof(seg_sql_where) );
+		/* インデックス用カラム初期化 */
+		memset( idx1_column1, 0x00, sizeof(idx1_column1) );
+		memset( idx1_column2, 0x00, sizeof(idx1_column2) );
+		memset( idx2_column, 0x00, sizeof(idx2_column) );
+		/* 満期日条件初期化 */
+		memset( where_maturity_day, 0x00, sizeof(where_maturity_day) );
+		/* TS_対象ファイルINSERT用の基本条件設定初期化 */
+		memset( TSTF_base_proviso_setting, 0x00, sizeof(TSTF_base_proviso_setting) );
+		strcpy( TSTF_base_proviso_setting, "1" );
+
+		return_code = make_condition();
+		if( return_code != NORMAL ){
+			/* バッチ処理結果登録(各タスクの処理中断) */
+			sprintf( cmd_work, "BatchResultEntry 9 %s %s %s %s 0 0 0", start_date2, TSTM_task_name.arr, TSTM_processing_division, cycle );
+			send_err( m$message1, 0, cmd_work, NULL, NULL, G_STATION );
+			return_code = system( cmd_work );
+			if( return_code != 0 ){
+				send_err( m$system, return_code, cmd_work, NULL, NULL, G_STATION );
+			}
+
+			/* 異常終了タスク件数インクリメント */
+			error_task_count++;
+
+			/* 次タスクへ */
+			continue;
+		}
+
+		/*----------------------------------------------------------------------*/
+		/* 抽出テーブル作成						                                */
+		/*----------------------------------------------------------------------*/
+		/* 抽出テーブル名セット */
+		memset( extraction_table_name, 0x00, sizeof(extraction_table_name) );
+		/* TS_タスク管理.処理区分がEBMの場合 */
+		if( strcmp( TSTM_processing_division, "1" ) == 0 ){
+			strcpy( extraction_table_name, "EBM" );
+			strcat( extraction_table_name, TSTM_target_file_name.arr );
+		}
+		/* TS_タスク管理.処理区分がSEGの場合 */
+		else{
+			strcpy( extraction_table_name, "SSG" );
+			strcat( extraction_table_name, TSTM_target_file_name.arr );
+			memset( buff, 0x00, sizeof(buff) );
+			sprintf( buff, "%.8s", start_date2);
+			strcat( extraction_table_name, buff );
+		}
+
+		return_code = create_extraction_table();
+		if( return_code != NORMAL ){
+			/* バッチ処理結果登録(各タスクの処理中断) */
+			sprintf( cmd_work, "BatchResultEntry 9 %s %s %s %s 0 0 0", start_date2, TSTM_task_name.arr, TSTM_processing_division, cycle );
+			send_err( m$message1, 0, cmd_work, NULL, NULL, G_STATION );
+			return_code = system( cmd_work );
+			if( return_code != 0 ){
+				send_err( m$system, return_code, cmd_work, NULL, NULL, G_STATION );
+			}
+
+			/* 異常終了タスク件数インクリメント */
+			error_task_count++;
+
+			/* 次タスクへ */
+			continue;
+		}
+
+		/*----------------------------------------------------------------------*/
+		/* 中間テーブルより抽出データInsert(EBMのみ)						    */
+		/*----------------------------------------------------------------------*/
+		if( strcmp( TSTM_processing_division, "1" ) == 0 ){
+			return_code = create_intermediate_table();
+			if( return_code != NORMAL ){
+				/* バッチ処理結果登録(各タスクの処理中断) */
+				sprintf( cmd_work, "BatchResultEntry 9 %s %s %s %s 0 0 0", start_date2, TSTM_task_name.arr, TSTM_processing_division, cycle );
+				send_err( m$message1, 0, cmd_work, NULL, NULL, G_STATION );
+				return_code = system( cmd_work );
+				if( return_code != 0 ){
+					send_err( m$system, return_code, cmd_work, NULL, NULL, G_STATION );
+				}
+
+				/* 異常終了タスク件数インクリメント */
+				error_task_count++;
+
+				/* 次タスクへ */
+				continue;
+			}
+		}
+
+		/*----------------------------------------------------------------------*/
+		/* キャンペーン中顧客の削除(CMP対象者除外の場合)					    */
+		/*----------------------------------------------------------------------*/
+		if( strcmp( TSTM_cmp_object_person_exclusion, "1" ) == 0){
+			memset( sqlcmd, 0x00, sizeof( sqlcmd ) );
+			strcpy( sqlcmd, "DELETE FROM " );
+			strcat( sqlcmd, extraction_table_name );
+			strcat( sqlcmd, " EBM " );
+			strcat( sqlcmd, "WHERE" );
+        		if( strcmp( G_KOKYAKU_KEY, CMF_JOIN ) == 0 ){
+				strcat( sqlcmd, " EBM.CIFNO IN" );
+				strcat( sqlcmd, " ( SELECT CC.CIFNO FROM TC_キャンペーン顧客 CC" );
+				strcat( sqlcmd, " WHERE" );
+				strcat( sqlcmd, " CC.CIFNO = EBM.CIFNO )" );
+			}
+			else {
+				strcat( sqlcmd, " EBM.CIFNO || EBM.店番 IN" );
+				strcat( sqlcmd, " ( SELECT CC.CIFNO || CC.店番 FROM TC_キャンペーン顧客 CC" );
+				strcat( sqlcmd, " WHERE" );
+				strcat( sqlcmd, " CC.CIFNO = EBM.CIFNO AND CC.店番 = EBM.店番 )" );
+			}
+
+			G_POSITION = __LINE__;
+			EXEC SQL EXECUTE IMMEDIATE :sqlcmd;
+			if( sqlca.sqlcode < 0 ){
+				send_err( m$sql_statment, 0, sqlcmd, NULL, NULL, G_STATION );
+
+				/* ロールバック */
+				EXEC SQL ROLLBACK WORK;
+
+				/* バッチ処理結果登録(各タスクの処理中断) */
+				sprintf( cmd_work, "BatchResultEntry 9 %s %s %s %s 0 0 0", start_date2, TSTM_task_name.arr, TSTM_processing_division, cycle );
+				send_err( m$message1, 0, cmd_work, NULL, NULL, G_STATION );
+				return_code = system( cmd_work );
+				if( return_code != 0 ){
+					send_err( m$system, return_code, cmd_work, NULL, NULL, G_STATION );
+				}
+
+				/* 異常終了タスク件数インクリメント */
+				error_task_count++;
+
+				/* 次タスクへ */
+				continue;
+
+			}
+
+		}
+
+		/*----------------------------------------------------------------------*/
+		/* TS_対象ファイル情報登録											    */
+		/*----------------------------------------------------------------------*/
+		return_code = target_file_registration();
+		if( return_code != NORMAL ){
+			/* ロールバック */
+			EXEC SQL ROLLBACK WORK;
+
+			/* バッチ処理結果登録(各タスクの処理中断) */
+			sprintf( cmd_work, "BatchResultEntry 9 %s %s %s %s 0 0 0", start_date2, TSTM_task_name.arr, TSTM_processing_division, cycle );
+			send_err( m$message1, 0, cmd_work, NULL, NULL, G_STATION );
+			return_code = system( cmd_work );
+			if( return_code != 0 ){
+				send_err( m$system, return_code, cmd_work, NULL, NULL, G_STATION );
+			}
+
+			/* 異常終了タスク件数インクリメント */
+			error_task_count++;
+
+			/* 次タスクへ */
+			continue;
+		}
+
+		/*----------------------------------------------------------------------*/
+		/* 抽出データ更新(EBMのみ)											    */
+		/*----------------------------------------------------------------------*/
+		/* 抽出条件に'満期日'が含まれている場合に、満期日をセット */
+		if( strcmp( TSTM_processing_division, "1" ) == 0 ){
+			if( strstr( seg_sql_where, "満期日" ) != NULL ){
+				memset( sqlcmd, 0x00, sizeof( sqlcmd ) );
+				strcpy( sqlcmd, "UPDATE " );
+				strcat( sqlcmd, extraction_table_name );
+				strcat( sqlcmd, " EBM " );
+				strcat( sqlcmd, "SET EBM.満期日 = ( SELECT MAX(FIX.満期日) AS 満期日" );
+        			if( strcmp( G_KOKYAKU_KEY, CMF_JOIN ) == 0 ){
+					strcat( sqlcmd, " FROM TF_個別明細固定性預金 FIX" );
+					strcat( sqlcmd, " WHERE EBM.CIFNO = FIX.CIFNO " );
+				}
+				else {
+					strcat( sqlcmd, " FROM TF_個別明細固定性預金 FIX WHERE EBM.店番 = FIX.店番" );
+					strcat( sqlcmd, " AND EBM.CIFNO = FIX.CIFNO " );
+				}
+				/* 条件の最後にANDの可能性があるのでANDを全て除去 */
+				string_replace( where_maturity_day, "AND" , "");
+				/* テーブル名をAND+テーブル別名１に変換 */
+				string_replace( where_maturity_day, "TF_個別明細固定性預金" , "AND FIX");
+				strcat( sqlcmd, where_maturity_day );
+				strcat( sqlcmd, " ) " );
+				strcat( sqlcmd, "WHERE EXISTS ( SELECT 'X' FROM TF_個別明細固定性預金 FIX2" );
+        			if( strcmp( G_KOKYAKU_KEY, CMF_JOIN ) == 0 ){
+					strcat( sqlcmd, " WHERE EBM.CIFNO = FIX2.CIFNO " );
+				}
+				else {
+					strcat( sqlcmd, " WHERE EBM.店番 = FIX2.店番 AND EBM.CIFNO = FIX2.CIFNO " );
+				}
+				/* テーブル別名１をテーブル別名２に変換 */
+				string_replace( where_maturity_day, "FIX" , "FIX2");
+				strcat( sqlcmd, where_maturity_day );
+				strcat( sqlcmd, " ) " );
+
+				G_POSITION = __LINE__;
+				EXEC SQL EXECUTE IMMEDIATE :sqlcmd;
+				if( sqlca.sqlcode < 0 ){
+					send_err( m$sql_statment, 0, sqlcmd, NULL, NULL, G_STATION );
+
+					/* ロールバック */
+					EXEC SQL ROLLBACK WORK;
+
+					/* バッチ処理結果登録(各タスクの処理中断) */
+					sprintf( cmd_work, "BatchResultEntry 9 %s %s %s %s 0 0 0", start_date2, TSTM_task_name.arr, TSTM_processing_division, cycle );
+					send_err( m$message1, 0, cmd_work, NULL, NULL, G_STATION );
+					return_code = system( cmd_work );
+					if( return_code != 0 ){
+						send_err( m$system, return_code, cmd_work, NULL, NULL, G_STATION );
+					}
+
+					/* 異常終了タスク件数インクリメント */
+					error_task_count++;
+
+					/* 次タスクへ */
+					continue;
+				}
+			}
+		}
+
+		/*----------------------------------------------------------------------*/
+		/* コールリスト作成(EBMのみ)										    */
+		/*----------------------------------------------------------------------*/
+		if( strcmp( TSTM_processing_division, "1" ) == 0 ){
+			/* コールリスト名セット */
+			memset( call_list_name, 0x00, sizeof(call_list_name) );
+			strcpy( call_list_name, "C" );
+			strcat( call_list_name, TSTM_center_id );
+			strcat( call_list_name, TSTM_campaign_id );
+			strcat( call_list_name, "ALL" );
+
+			return_code = create_call_list( start_date2, TSTM_task_name.arr );
+			if( return_code != NORMAL ){
+				/* ロールバック */
+				EXEC SQL ROLLBACK WORK;
+
+				/* バッチ処理結果登録(各タスクの処理中断) */
+				sprintf( cmd_work, "BatchResultEntry 9 %s %s %s %s 0 0 0", start_date2, TSTM_task_name.arr, TSTM_processing_division, cycle );
+				send_err( m$message1, 0, cmd_work, NULL, NULL, G_STATION );
+				return_code = system( cmd_work );
+				if( return_code != 0 ){
+					send_err( m$system, return_code, cmd_work, NULL, NULL, G_STATION );
+				}
+
+				/* 異常終了タスク件数インクリメント */
+				error_task_count++;
+
+				/* 次タスクへ */
+				continue;
+			}
+		}
+
+		/*----------------------------------------------------------------------*/
+		/* 各タスクの終了処理					                                */
+		/*----------------------------------------------------------------------*/
+		/* バッチ処理結果登録(各タスクの処理終了) */
+		/* TS_タスク管理.処理区分がEBMの場合 */
+		if( strcmp( TSTM_processing_division, "1" ) == 0 ){
+			sprintf( cmd_work, "BatchResultEntry 2 %s %s %s %s %d %d %d", start_date2, TSTM_task_name.arr, TSTM_processing_division, cycle, ebm_total_count, ebm_success_count, ebm_error_count );
+		}
+		/* TS_タスク管理.処理区分がSEGの場合 */
+		else{
+			sprintf( cmd_work, "BatchResultEntry 2 %s %s %s %s %d %d 0", start_date2, TSTM_task_name.arr, TSTM_processing_division, cycle, TSTF_record_count, TSTF_record_count );
+		}
+		send_err( m$message1, 0, cmd_work, NULL, NULL, G_STATION );
+		return_code = system( cmd_work );
+		if( return_code != 0 ){
+			send_err( m$system, return_code, cmd_work, NULL, NULL, G_STATION );
+		}
+
+		/* 終了メッセージ(各タスクの処理終了) */
+		memset( buff, 0x00, sizeof(buff) );
+		sprintf( buff, "【%s】タスクの処理が終了しました．" ,TSTM_task_name.arr );
+		send_err( m$message1, 0, buff, NULL, NULL, G_STATION );
+
+		/* コミット */
+		EXEC SQL COMMIT WORK;
+
+		/* 正常終了タスク件数インクリメント */
+		success_task_count++;
+	}
+
+	/* タスク件数が0件の場合 */
+	if( total_task_count == 0 ){
+		send_err( m$message1, 0, "実行すべきタスクが存在しませんでした．", NULL, NULL, G_STATION );
+        exit_code = NORMAL ;
+        goto ENDPROC ;
+	}
+
+	/*======================================================================**
+    **              終了処理
+    **======================================================================*/
+ENDPROC:
+	/* カーソル１クローズ */
+	if( cur1_open_flag == 1 ){
+		EXEC SQL CLOSE cur1;
+	}
+
+	/* ＤＢ切断 */
+	if( db_connect_flag == 1){
+		if( exit_code == NORMAL ){
+			EXEC SQL COMMIT WORK RELEASE;
+		}
+		else{
+			EXEC SQL ROLLBACK WORK RELEASE;
+		}
+	}
+
+	/* 正常終了 */
+	if( exit_code == NORMAL ){
+		/* バッチ処理結果登録(処理終了) */
+		sprintf( cmd_work, "BatchResultEntry 2 %s 夜間SEG条件実行 3 %s %d %d %d", start_date, cycle, total_task_count, success_task_count, error_task_count );
+		send_err( m$message1, 0, cmd_work, NULL, NULL, G_STATION );
+		return_code = system( cmd_work );
+		if( return_code != 0 ){
+			send_err( m$system, return_code, cmd_work, NULL, NULL, G_STATION );
+		}
+
+		send_err( m$stop_process, NORMAL, "夜間SEG条件実行", NULL, NULL, G_STATION );
+		exit( NORMAL );
+	}
+	/* 異常終了 */
+	else{
+		/* バッチ処理結果登録(処理中断) */
+		sprintf( cmd_work, "BatchResultEntry 9 %s 夜間SEG条件実行 3 %s 0 0 0", start_date, cycle );
+		send_err( m$message1, 0, cmd_work, NULL, NULL, G_STATION );
+		return_code = system( cmd_work );
+		if( return_code != 0 ){
+			send_err( m$system, return_code, cmd_work, NULL, NULL, G_STATION );
+		}
+
+		send_err( m$abend_process, ERROR, "夜間SEG条件実行", NULL, NULL, G_STATION );
+		exit( ERROR );
+	}
+}
+
+/*==========================================================================*/
+/*																			*/
+/* PROGRAM NAME	: 処理開始日時取得											*/
+/*																			*/
+/* INPUT		: start_timestamp・・・処理開始日時格納先					*/
+/*																			*/
+/* EXIT			: 0															*/
+/*																			*/
+/*==========================================================================*/
+int get_start_timestamp( char* start_timestamp )
+{
+	struct tm*		tm;
+	int				i_year;
+	char			w_usec[10];
+
+	time_t now;
+	time(&now);
+	tm = localtime( &now );
+
+	*(start_timestamp+0) = 0;
+
+	if( tm->tm_year < 100 )
+	{
+		i_year = 1900 + tm->tm_year;
+	}
+	else
+	{
+		i_year = 2000 + tm->tm_year - 100;
+	}
+
+	memset( w_usec, 0x00, sizeof(w_usec) );	
+
+	sprintf( start_timestamp, "%04d%02d%02d%02d%02d%02d", 
+		i_year, tm->tm_mon+1, tm->tm_mday, 
+		tm->tm_hour, tm->tm_min, tm->tm_sec );
+
+	return( 0 );
+}
+
+/*==========================================================================*/
+/*																			*/
+/* PROGRAM NAME	: 文字列置換処理											*/
+/*																			*/
+/* INPUT		: replace_string・・・置換を行う文字列						*/
+/*				  from_string	・・・置換対象文字列						*/
+/*				  to_string		・・・置換後文字列							*/
+/*																			*/
+/* EXIT			: 0															*/
+/*																			*/
+/*==========================================================================*/
+int string_replace( char *replace_string, const char *from_string, const char *to_string )
+{
+	int   to_len;
+	int   from_len;
+	int   shift_len;
+	char *start;
+	char *stop;
+	char *p;
+
+	to_len   = strlen( to_string );
+	from_len = strlen( from_string );
+	shift_len   = to_len - from_len;
+	start    = replace_string;
+	stop     = replace_string + strlen( replace_string );
+
+	/* 文字列の先頭から置換対象文字列を検索	*/
+	while( NULL != ( p = strstr( start, from_string ) ) )
+	{
+		start = string_shift( p + from_len, shift_len );
+		stop  = stop + shift_len;
+		memmove( p, to_string, to_len );
+	}
+
+	return( 0 );
+}
+char *string_shift( char *shift_string, size_t shift_len )
+{
+	char *start = shift_string;
+	char *stop  = shift_string + strlen( shift_string );
+	memmove( start + shift_len, start, stop-start+1 );
+
+	return shift_string;
+}
+
+/*==========================================================================*/
+/*																			*/
+/* PROGRAM NAME	: 条件文作成												*/
+/*																			*/
+/* INPUT		: None														*/
+/*																			*/
+/* EXIT         : 正常       ・・・NORMAL(0)								*/
+/*                異常       ・・・ERROR (9)								*/
+/*																			*/
+/*==========================================================================*/
+int make_condition( void )
+{
+	int		return_code = NORMAL;			/* リターンコード */
+	int		i = 0;							/* カウンタ */
+	int		data_count = 0;					/* データ件数 */
+	int		cur2_open_flag = 0;				/* カーソル２オープンフラグ */
+	int		cur3_open_flag = 0;				/* カーソル３オープンフラグ */
+	char	alias_name[31];					/* カラム情報：別名 */
+	char	table_name[30];					/* カラム情報：テーブル名 */
+	char	column_name[31];				/* カラム情報：カラム名 */
+	char	seg_sql_immobilization[4096];	/* 条件文:SEG固定条件 */
+
+	/* SEG固定条件初期化 */
+	memset( seg_sql_immobilization, 0x00, sizeof(seg_sql_immobilization) );
+
+	/* TS_抽出条件より条件取得 */
+	G_POSITION = __LINE__;
+	EXEC SQL DECLARE cur2 CURSOR FOR
+		SELECT
+			条件種別,
+			SEQNO,
+			条件
+		FROM
+			TS_抽出条件
+		WHERE
+			条件名 = :TSTM_condition_name AND
+			登録区分 = '1'					/* 1:スケジュール設定使用条件 */
+		ORDER BY
+			条件種別,
+			SEQNO
+		;
+	if( sqlca.sqlcode < 0 ) {
+        send_err( m$sql_statment, 0, "DECLARE cur2", NULL, NULL, G_STATION );
+		return_code = ERROR;
+		goto ENDFUNC;
+	}
+
+	G_POSITION = __LINE__;
+	EXEC SQL OPEN cur2;
+	if( sqlca.sqlcode < 0 ) {
+        send_err( m$sql_statment, 0, "OPEN cur2", NULL, NULL, G_STATION );
+		return_code = ERROR;
+		goto ENDFUNC;
+	}
+
+	cur2_open_flag = 1;
+
+	while( 1 ) {
+		/* ホスト変数初期化 */
+		memset( TSEC_condition_type, 0x00, sizeof(TSEC_condition_type) );
+		TSEC_sequence_number = 0;
+		memset( TSEC_condition.arr, 0x00, sizeof(TSEC_condition.arr) );
+
+		G_POSITION = __LINE__;
+		EXEC SQL FETCH cur2
+			INTO
+			    :TSEC_condition_type	:TSECi_condition_type,
+				:TSEC_sequence_number	:TSECi_sequence_number,
+				:TSEC_condition			:TSECi_condition
+			;
+		if( sqlca.sqlcode < 0 ) {
+			send_err( m$sql_statment, 0, "FETCH cur2", NULL, NULL, G_STATION );
+			return_code = ERROR;
+			goto ENDFUNC;
+		}
+
+		if( sqlca.sqlcode == ORA_NOF ) {
+            break;
+        }
+
+		/* データ件数インクリメント */
+		data_count++;
+
+		/* カラム情報の場合 */
+		if( strcmp( TSEC_condition_type, "0" ) == 0 ){
+			if( TSEC_sequence_number == 1 ){
+				strcat( seg_sql_select, " " );
+			}
+			else{
+				strcat( seg_sql_select, "," );
+			}
+			/* 下記フォーマットから各項目取得 */
+			/* alias-name (30byte) + spaace (1byte) + table-name (30byte) + comma (1byte) +column-name(30byte) */
+			memset( alias_name, 0x00, sizeof(alias_name) );
+			memset( table_name, 0x00, sizeof(table_name) );
+			memset( column_name, 0x00, sizeof(column_name) );
+
+			/* 別名[alias-name (30byte) + spaace (1byte)]取得 */
+			for( i = 0 ; i < sizeof(alias_name) ; i++ ){
+				if( TSEC_condition.arr[i] == ' ' ){
+					break;
+				}
+				alias_name[i] = TSEC_condition.arr[i];
+			}
+
+			/* テーブル名[table-name (30byte)]取得 */
+			for( i = sizeof(alias_name) ; i < (sizeof(alias_name) + sizeof(table_name)) ; i++ ){
+				if( TSEC_condition.arr[i] == ' ' ){
+					break;
+				}
+				table_name[i - sizeof(alias_name)] = TSEC_condition.arr[i];
+			}
+
+			/* カラム名[comma (1byte) +column-name(30byte)]取得 */
+			for( i = (sizeof(alias_name) + sizeof(table_name)) ; i < TSEC_condition.len ; i++ ){
+				if( TSEC_condition.arr[i] == ' ' ){
+					break;
+				}
+				column_name[i - (sizeof(alias_name) + sizeof(table_name))] = TSEC_condition.arr[i];
+			}
+
+			/* 取得項目からカラム情報組み立て */
+			strcat( seg_sql_select, table_name);
+			strcat( seg_sql_select, column_name);
+			strcat( seg_sql_select, " ");
+			strcat( seg_sql_select, alias_name);
+
+			/* 抽出テーブルのインデックス用カラム情報セット */
+			if( strcmp( column_name, ".店番" ) == 0 ){
+				strcpy( idx1_column1, alias_name );
+			}
+			if( strcmp( column_name, ".CIFNO" ) == 0 ){
+				strcpy( idx1_column2, alias_name );
+			}
+			if( strcmp( column_name, ".世帯番号" ) == 0 ){
+				strcpy( idx2_column, alias_name );
+			}
+
+
+		}
+		/* テーブルの場合 */
+		else if( strcmp( TSEC_condition_type, "1" ) == 0 ){
+			if( TSEC_sequence_number == 1 ){
+				strcat( seg_sql_from, " " );
+			}
+			else{
+				strcat( seg_sql_from, "," );
+			}
+			strcat( seg_sql_from, TSEC_condition.arr );
+		}
+		/* 条件の場合 */
+		else{
+			/* SEQNOが'1'の場合 */
+			if( TSEC_sequence_number == 1 ){
+				/* 条件が'WHERE [全顧客対象]'でない場合、TM_SEG固定条件よりSEG固定条件セット */
+				/* 条件が'WHERE [全顧客対象]'の場合、SEG固定条件NULL */
+				/* 元ファイル区分が'0'(顧客属性)前提 */
+				if( strcmp( TSTM_former_file_division, "0" ) == 0 && strcmp( TSEC_condition.arr, "WHERE [全顧客対象]" ) != 0){
+					strcpy( TSTF_base_proviso_setting, "0" );
+					strcat( seg_sql_where, " " );
+					strcat( seg_sql_where, TSEC_condition.arr );
+
+					/* TS_SEG固定条件より条件式取得 */
+					G_POSITION = __LINE__;
+					EXEC SQL DECLARE cur3 CURSOR FOR
+						SELECT
+							条件式
+						FROM
+							TM_SEG固定条件
+						WHERE
+							データ区分 = :TSTM_data_division
+						ORDER BY
+							データ区分,
+							SEQ
+						;
+					if( sqlca.sqlcode < 0 ) {
+						send_err( m$sql_statment, 0, "DECLARE cur3", NULL, NULL, G_STATION );
+						return_code = ERROR;
+						goto ENDFUNC;
+					}
+
+					G_POSITION = __LINE__;
+					EXEC SQL OPEN cur3;
+					if( sqlca.sqlcode < 0 ) {
+						send_err( m$sql_statment, 0, "OPEN cur3", NULL, NULL, G_STATION );
+						return_code = ERROR;
+						goto ENDFUNC;
+					}
+
+					cur3_open_flag = 1;
+
+					/* ホスト変数初期化 */
+					memset( TMSE_condition_equation.arr, 0x00, sizeof(TMSE_condition_equation.arr) );
+
+					G_POSITION = __LINE__;
+					EXEC SQL FETCH cur3
+						INTO
+							:TMSE_condition_equation	:TMSEi_condition_equation
+						;
+					if( sqlca.sqlcode < 0 ) {
+						send_err( m$sql_statment, 0, "FETCH cur3", NULL, NULL, G_STATION );
+						return_code = ERROR;
+						goto ENDFUNC;
+					}
+
+					/* データが存在する場合、取得した条件式を結合してSEG固定条件にセット */
+					/* データが存在しない場合、SEG固定条件NULL */
+					if( sqlca.sqlcode != ORA_NOF ) {
+						/* 親テーブルが顧客属性以外は置き換え */
+						if( strcmp( TSTM_parent_target_file_name.arr, "TF_顧客属性" ) != 0 ){
+							string_replace( TMSE_condition_equation.arr, "TF_顧客属性", TSTM_parent_target_file_name.arr );
+							TMSE_condition_equation.len = strlen( TMSE_condition_equation.arr );
+						}
+						/* SEG固定条件に取得条件追加 */
+						strcat( seg_sql_immobilization, " " );
+						strcat( seg_sql_immobilization, TMSE_condition_equation.arr );
+
+						while( 1 ) {
+							/* ホスト変数初期化 */
+							memset( TMSE_condition_equation.arr, 0x00, sizeof(TMSE_condition_equation.arr) );
+
+							G_POSITION = __LINE__;
+							EXEC SQL FETCH cur3
+								INTO
+									:TMSE_condition_equation	:TMSEi_condition_equation
+								;
+							if( sqlca.sqlcode < 0 ) {
+								send_err( m$sql_statment, 0, "FETCH cur3", NULL, NULL, G_STATION );
+								return_code = ERROR;
+								goto ENDFUNC;
+							}
+
+							if( sqlca.sqlcode == ORA_NOF ) {
+								break;
+							}
+
+							/* 親テーブルが顧客属性以外は置き換え */
+							if( strcmp( TSTM_parent_target_file_name.arr, "TF_顧客属性" ) != 0 ){
+								string_replace( TMSE_condition_equation.arr, "TF_顧客属性", TSTM_parent_target_file_name.arr );
+								TMSE_condition_equation.len = strlen( TMSE_condition_equation.arr );
+							}
+							/* SEG固定条件に取得条件追加 */
+							strcat( seg_sql_immobilization, " " );
+							strcat( seg_sql_immobilization, TMSE_condition_equation.arr );
+						}
+					}
+				}
+				/* 元ファイル区分が'0'(顧客属性)以外はSEG固定条件の判断不要 */
+				else if( strcmp( TSTM_former_file_division, "0" ) != 0 ){
+					strcpy( TSTF_base_proviso_setting, "0" );
+					strcat( seg_sql_where, " " );
+					strcat( seg_sql_where, TSEC_condition.arr );
+				}
+			}
+			/* SEQNOが'1'以外 */
+			else{
+				strcat( seg_sql_where, " " );
+				strcat( seg_sql_where, TSEC_condition.arr );
+			}
+			/* 満期日が含まれている場合条件を退避 */
+			if( strstr( TSEC_condition.arr, "満期日" ) != NULL ){
+				strcat( where_maturity_day, " " );
+				strcat( where_maturity_day, TSEC_condition.arr );
+			}
+		}
+	}
+
+	/* データが存在しなかった場合 */
+	if( data_count == 0 ){
+		send_err( m$message1, 0, "抽出条件の設定がありません．", NULL, NULL, G_STATION );
+		return_code = ERROR;
+		goto ENDFUNC;
+	}
+
+	/* 条件にSEG固定条件追加 */
+	strcat(seg_sql_where, seg_sql_immobilization);
+
+	/* 文字列の最後にスペース追加 */
+	strcat(seg_sql_select, " ");
+	strcat(seg_sql_from, " ");
+	strcat(seg_sql_where, " ");
+
+ENDFUNC:
+	/* カーソル２・３クローズ */
+	if( cur2_open_flag == 1 ){
+		EXEC SQL CLOSE cur2;
+	}
+
+	if( cur3_open_flag == 1 ){
+		EXEC SQL CLOSE cur3;
+	}
+
+	return(return_code);
+}
+
+/*==========================================================================*/
+/*																			*/
+/* PROGRAM NAME	: 抽出テーブル作成											*/
+/*																			*/
+/* INPUT		: None														*/
+/*																			*/
+/* EXIT         : 正常       ・・・NORMAL(0)								*/
+/*                異常       ・・・ERROR (9)								*/
+/*																			*/
+/*==========================================================================*/
+int create_extraction_table( void )
+{
+	int		return_code = NORMAL;			/* リターンコード */
+
+	/* TS_タスク管理.処理区分がEBMの場合、抽出テーブル存在チェック */
+	if( strcmp( TSTM_processing_division, "1" ) == 0 ){
+		work_count = 0;
+		G_POSITION = __LINE__;
+		EXEC SQL
+			SELECT
+				COUNT(*)
+			INTO
+				:work_count
+			FROM
+				USER_TABLES
+			WHERE
+				TABLE_NAME = :extraction_table_name
+			;
+		if( sqlca.sqlcode < 0 ){
+			send_err( m$sql_statment, 0, "SELECT COUNT(*) EBM抽出テーブル", NULL, NULL, G_STATION );
+			return_code = ERROR;
+			goto ENDFUNC;
+		}
+
+		/* テーブルが存在する場合、処理正常終了 */
+		if( work_count > 0 ){
+			return_code = NORMAL;
+			goto ENDFUNC;
+		}
+	}
+
+	/*----------------------------------------------------------------------*/
+	/* 抽出テーブル作成						                                */
+	/*----------------------------------------------------------------------*/
+	memset( seg_sql, 0x00, sizeof(seg_sql) );
+	strcpy( seg_sql, "CREATE TABLE ");
+	strcat( seg_sql, extraction_table_name );
+	strcat( seg_sql, " ");
+	
+	/* TS_タスク管理.処理区分がEBMの場合 */
+	if( strcmp( TSTM_processing_division, "1" ) == 0 ){
+		strcat( seg_sql, "(" );
+		strcat( seg_sql, " 店番 CHAR(5)," );
+		strcat( seg_sql, " CIFNO CHAR(10)," );
+		strcat( seg_sql, " 世帯番号 CHAR(13)," );
+		strcat( seg_sql, " 非代表者フラグ CHAR(1) DEFAULT '0'," );
+		strcat( seg_sql, " 配分フラグ CHAR(1) DEFAULT '0'," );
+		strcat( seg_sql, " 満期日 CHAR(8)," );
+		strcat( seg_sql, " 対象者数 NUMBER(4) " );
+		strcat( seg_sql, ") " );
+		strcat( seg_sql, "TABLESPACE " );
+		strcat( seg_sql, TBS_NAME_SEG_TBL );
+
+	}
+	/* TS_タスク管理.処理区分がSEGの場合 */
+	else{
+		strcat( seg_sql, "TABLESPACE " );
+		strcat( seg_sql, TBS_NAME_SEG_TBL );
+		strcat( seg_sql, " ");
+
+		/* TS_タスク管理.データ区分がTM抽出の場合 */
+		if( strcmp( TSTM_data_division, "1" ) == 0 ){
+			strcat( seg_sql, "AS SELECT DISTINCT " );
+			strcat( seg_sql, TSTM_parent_target_file_name.arr );
+			strcat( seg_sql, ".店番, " );
+			strcat( seg_sql, TSTM_parent_target_file_name.arr );
+			strcat( seg_sql, ".CIFNO, " );
+			strcat( seg_sql, TSTM_parent_target_file_name.arr );
+			strcat( seg_sql, ".世帯番号," );
+			strcat( seg_sql, " '0' AS 非代表者フラグ," );
+			strcat( seg_sql, " '0' AS 配分フラグ," );
+			strcat( seg_sql, " '        ' AS 満期日," );
+			strcat( seg_sql, " 1 AS 対象者数 " );
+			strcat( seg_sql, "FROM" );
+			strcat( seg_sql, seg_sql_from );
+			strcat( seg_sql, "WHERE" );
+			strcat( seg_sql, seg_sql_where );
+		}
+
+		/* TS_タスク管理.データ区分がDM抽出の場合 */
+		else if( strcmp( TSTM_data_division, "2" ) == 0 ){
+			strcat( seg_sql, "AS SELECT DISTINCT " );
+			/* 保守性を考慮し例外的に'*'を使用する */
+			strcat( seg_sql, TSTM_parent_target_file_name.arr );
+			strcat( seg_sql, ".*" );
+			/* 親ファイルが顧客属性、世帯属性の場合 */
+			if( strcmp( TSTM_parent_target_file_name.arr, "TF_顧客属性" ) == 0 || 
+				strcmp( TSTM_parent_target_file_name.arr, "TF_世帯属性" ) == 0 ){
+				strcat( seg_sql, ", '0' AS 非代表者フラグ," );
+				strcat( seg_sql, " '0' AS 配分フラグ," );
+				strcat( seg_sql, " '        ' AS 満期日," );
+				strcat( seg_sql, " 1 AS 対象者数" );
+			}
+			strcat( seg_sql, " FROM" );
+			strcat( seg_sql, seg_sql_from );
+			strcat( seg_sql, "WHERE" );
+			strcat( seg_sql, seg_sql_where );
+		}
+
+		/* TS_タスク管理.データ区分がその他抽出の場合 */
+		else{
+			strcat( seg_sql, "AS SELECT" );
+			strcat( seg_sql, seg_sql_select );
+			strcat( seg_sql, "FROM" );
+			strcat( seg_sql, seg_sql_from );
+			strcat( seg_sql, "WHERE" );
+			strcat( seg_sql, seg_sql_where );
+		}
+	}
+
+	G_POSITION = __LINE__;
+	EXEC SQL EXECUTE IMMEDIATE :seg_sql;
+	if( sqlca.sqlcode < 0 ){
+		send_err( m$sql_statment, 0, seg_sql, NULL, NULL, G_STATION );
+		return_code = ERROR;
+		goto ENDFUNC;
+	}
+
+	/*----------------------------------------------------------------------*/
+	/* 抽出テーブル用インデックス作成		                                */
+	/*----------------------------------------------------------------------*/
+	/* タイムスタンプ取得 */
+	memset( timestamp, 0x00, sizeof( timestamp ) );
+	G_POSITION = __LINE__;
+	EXEC SQL 
+		SELECT
+			TO_CHAR(SYSTIMESTAMP,'YYMMDDHH24MISSFF3')
+		INTO
+			:timestamp
+		FROM
+			DUAL
+		;
+	if( sqlca.sqlcode < 0 ){
+		send_err( m$sql_statment, 0, "SELECT SYSTIMESTAMP", NULL, NULL, G_STATION );
+		return_code = ERROR;
+		goto ENDFUNC;
+	}
+
+	/*
+	** インデックス１作成
+	*/
+	/* TS_タスク管理.処理区分がSEG ＆ TS_タスク管理.データ区分がその他抽出の場合 */
+	if( strcmp( TSTM_processing_division, "2" ) == 0 && strcmp( TSTM_data_division, "3") == 0 ){
+		/* 抽出テーブルに店番、CIFNOの両カラムが含まれていなければ処理スキップ */
+		if( idx1_column1[0] == 0x00 || idx1_column2[0] == 0x00 ){
+			goto CREATE_IDX2;
+		}
+		else{
+			memset( sqlcmd, 0x00, sizeof( sqlcmd ) );
+			strcpy( sqlcmd, "CREATE INDEX ISS1" );
+			strcat( sqlcmd, timestamp );
+			strcat( sqlcmd, " ON " );
+			strcat( sqlcmd, extraction_table_name );
+			strcat( sqlcmd, " ( " );
+			strcat( sqlcmd, idx1_column1 );
+			strcat( sqlcmd, ", " );
+			strcat( sqlcmd, idx1_column2 );
+			strcat( sqlcmd, " ) " );
+			strcat( sqlcmd, "TABLESPACE " );
+			strcat( sqlcmd, TBS_NAME_SEG_IDX );
+		}
+	}
+	else{
+		memset( sqlcmd, 0x00, sizeof( sqlcmd ) );
+		/* TS_タスク管理.処理区分がEBMの場合 */
+		if( strcmp( TSTM_processing_division, "1" ) == 0 ){
+			strcpy( sqlcmd, "CREATE UNIQUE INDEX IE1" );
+		}
+		/* TS_タスク管理.処理区分がSEGの場合 */
+		else{
+			strcpy( sqlcmd, "CREATE UNIQUE INDEX ISS1" );
+		}
+		strcat( sqlcmd, timestamp );
+		strcat( sqlcmd, " ON " );
+		strcat( sqlcmd, extraction_table_name );
+		if( strcmp( G_KOKYAKU_KEY, CMF_JOIN ) == 0 ){
+			strcat( sqlcmd, " ( CIFNO ) " );
+		}
+		else {
+			strcat( sqlcmd, " ( 店番, CIFNO ) " );
+		}
+		strcat( sqlcmd, "TABLESPACE " );
+		strcat( sqlcmd, TBS_NAME_SEG_IDX );
+	}
+
+	G_POSITION = __LINE__;
+	EXEC SQL EXECUTE IMMEDIATE :sqlcmd;
+	if( sqlca.sqlcode < 0 ){
+		send_err( m$sql_statment, 0, sqlcmd, NULL, NULL, G_STATION );
+		return_code = ERROR;
+		goto ENDFUNC;
+	}
+
+CREATE_IDX2:
+	/*
+	** インデックス２作成
+	*/
+	/* TS_タスク管理.処理区分がSEG ＆ TS_タスク管理.データ区分がその他抽出の場合 */
+	if( strcmp( TSTM_processing_division, "2" ) == 0 && strcmp( TSTM_data_division, "3" ) == 0 ){
+		/* 抽出テーブルに世帯番号カラムが含まれていなければ処理スキップ */
+		if( idx2_column[0] == 0x00 ){
+			goto ENDFUNC;
+		}
+		else{
+			memset( sqlcmd, 0x00, sizeof( sqlcmd ) );
+			strcpy( sqlcmd, "CREATE INDEX ISS2" );
+			strcat( sqlcmd, timestamp );
+			strcat( sqlcmd, " ON " );
+			strcat( sqlcmd, extraction_table_name );
+			strcat( sqlcmd, " ( " );
+			strcat( sqlcmd, idx2_column );
+			strcat( sqlcmd, " ) " );
+			strcat( sqlcmd, "TABLESPACE " );
+			strcat( sqlcmd, TBS_NAME_SEG_IDX );
+		}
+	}
+	else{
+		memset( sqlcmd, 0x00, sizeof( sqlcmd ) );
+		/* TS_タスク管理.処理区分がEBMの場合 */
+		if( strcmp( TSTM_processing_division, "1" ) == 0 ){
+			strcpy( sqlcmd, "CREATE INDEX IE2" );
+		}
+		/* TS_タスク管理.処理区分がSEGの場合 */
+		else{
+			strcpy( sqlcmd, "CREATE INDEX ISS2" );
+		}
+		strcat( sqlcmd, timestamp );
+		strcat( sqlcmd, " ON ");
+		strcat( sqlcmd, extraction_table_name );
+		strcat( sqlcmd, " ( 世帯番号 ) " );
+		strcat( sqlcmd, "TABLESPACE " );
+		strcat( sqlcmd, TBS_NAME_SEG_IDX );
+	}
+
+	G_POSITION = __LINE__;
+	EXEC SQL EXECUTE IMMEDIATE :sqlcmd;
+	if( sqlca.sqlcode < 0 ){
+		send_err( m$sql_statment, 0, sqlcmd, NULL, NULL, G_STATION );
+		return_code = ERROR;
+		goto ENDFUNC;
+	}
+
+ENDFUNC:
+	return( return_code );
+}
+
+
+/*==========================================================================*/
+/*																			*/
+/* PROGRAM NAME	: 中間テーブル作成											*/
+/*																			*/
+/* INPUT		: None														*/
+/*																			*/
+/* EXIT         : 正常       ・・・NORMAL(0)								*/
+/*                異常       ・・・ERROR (9)								*/
+/*																			*/
+/*==========================================================================*/
+int create_intermediate_table( void )
+{
+	int		return_code = NORMAL;
+
+	/* 中間テーブル存在'TPAC_BATCH'チェック */
+	work_count = 0;
+	G_POSITION = __LINE__;
+	EXEC SQL
+		SELECT
+			COUNT(*)
+		INTO
+			:work_count
+		FROM
+			USER_TABLES
+		WHERE
+			TABLE_NAME = 'TPAC_BATCH'
+		;
+	if( sqlca.sqlcode < 0 ){
+		send_err( m$sql_statment, 0, "SELECT COUNT(*) TPAC_BATCH", NULL, NULL, G_STATION );
+		return_code = ERROR;
+		goto ENDFUNC;
+	}
+
+	/* テーブルが存在する場合、DROP */
+	if( work_count > 0 ){
+		G_POSITION = __LINE__;
+		EXEC SQL DROP TABLE TPAC_BATCH;
+		if( sqlca.sqlcode < 0 ){
+			send_err( m$sql_statment, 0, "DROP TABLE TPAC_BATCH", NULL, NULL, G_STATION );
+			return_code = ERROR;
+			goto ENDFUNC;
+		}
+	}
+
+	/* 中間テーブル作成	*/
+	memset( seg_sql, 0x00, sizeof(seg_sql) );
+	strcpy( seg_sql, "CREATE TABLE" );
+	strcat( seg_sql, " TPAC_BATCH " );
+	strcat( seg_sql, "TABLESPACE " );
+	strcat( seg_sql, TBS_NAME_SEG_TBL );
+	strcat( seg_sql, " " );
+	strcat( seg_sql, "AS SELECT " );
+	strcat( seg_sql, TSTM_parent_target_file_name.arr );
+	strcat( seg_sql, ".店番, " );
+	strcat( seg_sql, TSTM_parent_target_file_name.arr );
+	strcat( seg_sql, ".CIFNO, " );
+	strcat( seg_sql, TSTM_parent_target_file_name.arr );
+	strcat( seg_sql, ".世帯番号 " );
+	strcat( seg_sql, "FROM" );
+	strcat( seg_sql, seg_sql_from );
+	strcat( seg_sql, "WHERE" );
+	strcat( seg_sql, seg_sql_where );
+
+	G_POSITION = __LINE__;
+	EXEC SQL EXECUTE IMMEDIATE :seg_sql;
+	if( sqlca.sqlcode < 0 ){
+		send_err( m$sql_statment, 0, seg_sql, NULL, NULL, G_STATION );
+		return_code = ERROR;
+		goto ENDFUNC;
+	}
+
+	/* 中間テーブルよりInsert */
+	memset( sqlcmd, 0x00, sizeof(sqlcmd) );
+	strcpy( sqlcmd, "INSERT INTO " );
+	strcat( sqlcmd, extraction_table_name );
+	strcat( sqlcmd, " EBM " );
+	strcat( sqlcmd, "SELECT DISTINCT" );
+	strcat( sqlcmd, " TMP.店番," );
+	strcat( sqlcmd, " TMP.CIFNO," );
+	strcat( sqlcmd, " TMP.世帯番号," );
+	strcat( sqlcmd, " '0'," );
+	strcat( sqlcmd, " '0'," );
+	strcat( sqlcmd, " NULL," );
+	strcat( sqlcmd, " 1 " );
+	strcat( sqlcmd, "FROM" );
+	strcat( sqlcmd, " TPAC_BATCH TMP " );
+	strcat( sqlcmd, "WHERE" );
+	if( strcmp( G_KOKYAKU_KEY, CMF_JOIN ) == 0 ){
+		strcat( sqlcmd, " TMP.CIFNO NOT IN (" );
+		strcat( sqlcmd, " SELECT EBM2.CIFNO FROM " );
+	}
+	else {
+		strcat( sqlcmd, " TMP.CIFNO || TMP.店番 NOT IN (" );
+		strcat( sqlcmd, " SELECT EBM2.CIFNO || EBM2.店番 FROM " );
+	}
+	strcat( sqlcmd, extraction_table_name );
+	strcat( sqlcmd, " EBM2 )" );
+
+	G_POSITION = __LINE__;
+	EXEC SQL EXECUTE IMMEDIATE :sqlcmd;
+	if( sqlca.sqlcode < 0 ){
+		send_err( m$sql_statment, 0, sqlcmd, NULL, NULL, G_STATION );
+		return_code = ERROR;
+		goto ENDFUNC;
+	}
+
+ENDFUNC:
+	return( return_code );
+}
+			
+
+/*==========================================================================*/
+/*																			*/
+/* PROGRAM NAME	: 対象ファイル登録											*/
+/*																			*/
+/* INPUT		: None														*/
+/*																			*/
+/* EXIT         : 正常       ・・・NORMAL(0)								*/
+/*                異常       ・・・ERROR (9)								*/
+/*																			*/
+/*==========================================================================*/
+int target_file_registration( void )
+{
+	int		return_code = NORMAL;
+	int		cur4_open_flag = 0;
+	int		cur5_open_flag = 0;
+
+	/*
+	** 顧客件数取得
+	*/
+	memset( sqlcmd, 0x00, sizeof( sqlcmd ) );
+	strcpy( sqlcmd, "SELECT COUNT(*) FROM " );
+	strcat( sqlcmd, extraction_table_name );
+
+	G_POSITION = __LINE__;
+	EXEC SQL PREPARE sql4 FROM :sqlcmd;
+	if( sqlca.sqlcode < 0 ){
+		send_err( m$sql_statment, 0, "PREPARE sql4", NULL, NULL, G_STATION );
+		return_code = ERROR;
+		goto ENDFUNC;
+	}
+
+	G_POSITION = __LINE__;
+	EXEC SQL DECLARE cur4 CURSOR FOR sql4;
+	if( sqlca.sqlcode < 0 ){
+		send_err( m$sql_statment, 0, "DECLARE cur4", NULL, NULL, G_STATION );
+		return_code = ERROR;
+		goto ENDFUNC;
+	}
+
+	G_POSITION = __LINE__;
+	EXEC SQL OPEN cur4;
+	if( sqlca.sqlcode < 0 ){
+		send_err( m$sql_statment, 0, "OPEN cur4", NULL, NULL, G_STATION );
+		return_code = ERROR;
+		goto ENDFUNC;
+	}
+
+	cur4_open_flag = 1;
+
+	/* ホスト変数初期化 */
+	TSTF_record_count = 0;
+
+	G_POSITION = __LINE__;
+	EXEC SQL FETCH cur4 INTO :TSTF_record_count;
+	if( sqlca.sqlcode < 0 ){
+		send_err( m$sql_statment, 0, "FETCH cur4", NULL, NULL, G_STATION );
+		return_code = ERROR;
+		goto ENDFUNC;
+	}
+
+	/*
+	** 世帯件数取得
+	*/
+	TSTFi_target_household_count = 0;
+	/* TS_タスク管理.処理区分がSEG ＆ TS_タスク管理.データ区分がその他抽出の場合 */
+	if( strcmp( TSTM_processing_division, "2" ) == 0 && strcmp( TSTM_data_division, "3" ) == 0 ){
+		/* 抽出テーブルに世帯番号カラムが含まれていなければNULLセット */
+		if( idx2_column[0] == 0x00 ){
+			TSTFi_target_household_count = ORA_NULL;
+			goto CHECK_RECODE;
+		}
+		else{
+			memset( sqlcmd, 0x00, sizeof( sqlcmd ) );
+			strcpy( sqlcmd, "SELECT COUNT(DISTINCT " );
+			strcat( sqlcmd, idx2_column );
+			strcat( sqlcmd, ") FROM " );
+			strcat( sqlcmd, extraction_table_name );
+		}
+	}
+	else{
+		memset( sqlcmd, 0x00, sizeof( sqlcmd ) );
+		strcpy( sqlcmd, "SELECT COUNT(DISTINCT 世帯番号) FROM " );
+		strcat( sqlcmd, extraction_table_name );
+	}
+
+	G_POSITION = __LINE__;
+	EXEC SQL PREPARE sql5 FROM :sqlcmd;
+	if( sqlca.sqlcode < 0 ){
+		send_err( m$sql_statment, 0, "PREPARE sql5", NULL, NULL, G_STATION );
+		return_code = ERROR;
+		goto ENDFUNC;
+	}
+
+	G_POSITION = __LINE__;
+	EXEC SQL DECLARE cur5 CURSOR FOR sql5;
+	if( sqlca.sqlcode < 0 ){
+		send_err( m$sql_statment, 0, "DECLARE cur5", NULL, NULL, G_STATION );
+		return_code = ERROR;
+		goto ENDFUNC;
+	}
+
+	G_POSITION = __LINE__;
+	EXEC SQL OPEN cur5;
+	if( sqlca.sqlcode < 0 ){
+		send_err( m$sql_statment, 0, "OPEN cur5", NULL, NULL, G_STATION );
+		return_code = ERROR;
+		goto ENDFUNC;
+	}
+
+	cur5_open_flag = 1;
+
+	/* ホスト変数初期化 */
+	TSTF_target_household_count = 0;
+
+	G_POSITION = __LINE__;
+	EXEC SQL FETCH cur5 INTO :TSTF_target_household_count;
+	if( sqlca.sqlcode < 0 ){
+		send_err( m$sql_statment, 0, "FETCH cur5", NULL, NULL, G_STATION );
+		return_code = ERROR;
+		goto ENDFUNC;
+	}
+
+CHECK_RECODE:
+	/* 対象ファイルレコード存在チェック */
+	work_count = 0;
+	G_POSITION = __LINE__;
+	EXEC SQL
+		SELECT
+			COUNT(*)
+		INTO
+			:work_count
+		FROM
+			TS_対象ファイル情報
+		WHERE
+			対象ファイル名 = :extraction_table_name
+		;
+	if( sqlca.sqlcode < 0 ){
+		send_err( m$sql_statment, 0, "SELECT COUNT(*) TS_対象ファイル情報", NULL, NULL, G_STATION );
+		return_code = ERROR;
+		goto ENDFUNC;
+	}
+
+	/* 存在する場合、UPDATE */
+	if( work_count > 0 ){
+		G_POSITION = __LINE__;
+		EXEC SQL
+			UPDATE
+				TS_対象ファイル情報
+			SET
+				レコード数 = :TSTF_record_count,
+				対象世帯数 = :TSTF_target_household_count :TSTFi_target_household_count
+			WHERE
+				対象ファイル名 = :extraction_table_name
+			;
+		if( sqlca.sqlcode < 0 ){
+			send_err( m$sql_statment, 0, "UPDATE TS_対象ファイル情報", NULL, NULL, G_STATION );
+			return_code = ERROR;
+			goto ENDFUNC;
+		}
+	}
+	/* 存在しない場合、INSERT */
+	else{
+		/* キャンペーンフラグセット */
+		/* TS_タスク管理.処理区分がEBMの場合は'1'、SEGの場合は'0' */
+		memset( TSTF_campaign_flag, 0x00, sizeof(TSTF_campaign_flag) );
+		if( strcmp( TSTM_processing_division, "1" ) == 0 ){
+			strcpy( TSTF_campaign_flag, "1" );
+		}
+		else{
+			strcpy( TSTF_campaign_flag, "0" );
+		}
+
+		/* 満期フラグセット */
+		/* 条件文：条件に'満期日'が含まれている場合は'1'、それ以外は'0' */
+		memset( TSTF_maturity_flag, 0x00, sizeof(TSTF_maturity_flag) );
+		if( strstr( seg_sql_where, "満期日" ) != NULL ){
+			strcpy( TSTF_maturity_flag, "1" );
+		}
+		else{
+			strcpy( TSTF_maturity_flag, "0" );
+		}
+
+		G_POSITION = __LINE__;
+		EXEC SQL
+			INSERT INTO
+				TS_対象ファイル情報
+			(
+				対象ファイル名,
+				表示用ファイル名,
+				条件名,
+				親対象ファイル名,
+				TMファイル名,
+				作成日付,
+				データ区分,
+				メモ1,
+				メモ2,
+				メモ3,
+				メモ4,
+				キャンペーンフラグ,
+				レコード数,
+				対象世帯数,
+				テーブル区分,
+				検索区分,
+				満期フラグ,
+				外部フラグ,
+				基本条件設定,
+				満期開始日,
+				満期終了日,
+				元ファイル区分,
+				抽出区分,
+				センタID,
+				削除フラグ,
+				登録日,
+				登録者
+			) VALUES (
+				:extraction_table_name,
+				:TSTM_target_file_name,
+				:extraction_table_name,
+				:TSTM_parent_target_file_name,
+				NULL,
+				SYSDATE,
+				:TSTM_data_division,
+				:TSTM_memo1,
+				:TSTM_memo2,
+				:TSTM_memo3,
+				:TSTM_memo4,
+				:TSTF_campaign_flag,
+				:TSTF_record_count,
+				:TSTF_target_household_count	:TSTFi_target_household_count,
+				'T',
+				'1',
+				:TSTF_maturity_flag,
+				'0',
+				:TSTF_base_proviso_setting,
+				NULL,
+				NULL,
+				:TSTM_former_file_division,
+				'1',
+				:TSTM_center_id,
+				'0',
+				SYSDATE,
+				'SPV'
+			);
+		if( sqlca.sqlcode < 0 ){
+			send_err( m$sql_statment, 0, "INSERT TS_対象ファイル情報", NULL, NULL, G_STATION );
+			return_code = ERROR;
+			goto ENDFUNC;
+		}
+
+	}
+ENDFUNC:
+	/* カーソル４・５クローズ */
+	if( cur4_open_flag == 1 ){
+		EXEC SQL CLOSE cur4;
+	}
+
+	if( cur5_open_flag == 1 ){
+		EXEC SQL CLOSE cur5;
+	}
+
+	return( return_code );
+}
+
+
+/*==========================================================================*/
+/*																			*/
+/* PROGRAM NAME	: コールリスト作成											*/
+/*																			*/
+/* INPUT		: None														*/
+/*																			*/
+/* EXIT         : 正常       ・・・NORMAL(0)								*/
+/*                異常       ・・・ERROR (9)								*/
+/*																			*/
+/*==========================================================================*/
+int create_call_list( char* start_date2 , char* task_name )
+{
+	int		return_code = NORMAL;
+	int		return_code2 = NORMAL;
+	int		cur6_open_flag = 0;
+	char	cmd_work[128];
+	char	now_record[512];
+
+	ebm_total_count = 0;
+	ebm_error_count = 0;
+	ebm_success_count = 0;
+	memset( cmd_work, 0x00, sizeof(cmd_work) );
+	memset( now_record, 0x00, sizeof(now_record) );
+
+	/* コールリストの存在チェック */
+	work_count = 0;
+	G_POSITION = __LINE__;
+	EXEC SQL
+		SELECT
+			COUNT(*)
+		INTO
+			:work_count
+		FROM
+			USER_TABLES
+		WHERE
+			TABLE_NAME = :call_list_name
+		;
+	if( sqlca.sqlcode < 0 ){
+		send_err( m$sql_statment, 0, "SELECT COUNT(*) コールリスト", NULL, NULL, G_STATION );
+		return_code = ERROR;
+		goto ENDFUNC;
+	}
+
+	if( work_count == 0 ){
+		send_err( m$sql_statment, 0, "SELECT COUNT(*) コールリスト 該当データなし", NULL, NULL, G_STATION );
+		return_code = ERROR;
+		goto ENDFUNC;
+	}
+
+	/* 中間テーブル件数分ループ */
+	G_POSITION = __LINE__;
+	EXEC SQL DECLARE cur6 CURSOR FOR
+		SELECT
+			店番,
+			CIFNO,
+			世帯番号
+		FROM
+			TPAC_BATCH
+		;
+	if( sqlca.sqlcode < 0 ){
+		send_err( m$sql_statment, 0, "DECLARE cur6", NULL, NULL, G_STATION );
+		return_code = ERROR;
+		goto ENDFUNC;
+	}
+
+	G_POSITION = __LINE__;
+	EXEC SQL OPEN cur6;
+	if( sqlca.sqlcode < 0 ){
+		send_err( m$sql_statment, 0, "OPEN cur6", NULL, NULL, G_STATION );
+		return_code = ERROR;
+		goto ENDFUNC;
+	}
+
+	cur6_open_flag = 1;
+
+	while( 1 ) {
+		/* ホスト変数初期化 */
+		memset( call_branch_num, 0x00, sizeof(call_branch_num) );
+		memset( call_cif_num, 0x00, sizeof(call_cif_num) );
+		memset( call_household_num, 0x00, sizeof(call_household_num) );
+
+		G_POSITION = __LINE__;
+		EXEC SQL FETCH cur6
+			INTO
+			    :call_branch_num,
+				:call_cif_num,
+				:call_household_num
+			;
+		if( sqlca.sqlcode < 0 ) {
+			send_err( m$sql_statment, 0, "FETCH cur6", NULL, NULL, G_STATION );
+			return_code = ERROR;
+			goto ENDFUNC;
+		}
+        
+		if( sqlca.sqlcode == ORA_NOF ) {
+            break;
+        }
+
+		/* データ件数インクリメント */
+		ebm_total_count++;
+
+		/* バッチ処理結果詳細用に取得データ退避 */
+		memset( now_record, 0x00, sizeof(now_record) );
+		sprintf( now_record, "\"%s\",\"%s\",\"%s\"", call_branch_num, call_cif_num, call_household_num );
+
+		/* 
+		** コールリストの該当顧客存在チェック 
+		** 存在しない場合(正常処理)  ：コールリストへINSERT
+		** 存在する場合(異常処理)：コールフラグの状態からUPDATE or 処理スキップ
+		*/
+		work_count = 0;
+		memset( sqlcmd, 0x00, sizeof( sqlcmd ) );
+		strcpy( sqlcmd, "SELECT COUNT(*) FROM " );
+		strcat( sqlcmd, call_list_name );
+		strcat( sqlcmd, " " );
+		strcat( sqlcmd, "WHERE" );
+		if( strcmp( G_KOKYAKU_KEY, CMF_JOIN ) == 0 ){
+			strcat( sqlcmd, " CIFNO = '" );
+			strcat( sqlcmd, call_cif_num );
+			strcat( sqlcmd, "'" );
+		}
+		else {
+			strcat( sqlcmd, " 店番 = '" );
+			strcat( sqlcmd, call_branch_num );
+			strcat( sqlcmd, "' AND CIFNO = '" );
+			strcat( sqlcmd, call_cif_num );
+			strcat( sqlcmd, "'" );
+		}
+
+		G_POSITION = __LINE__;
+		EXEC SQL PREPARE sql7 FROM :sqlcmd;
+		if( sqlca.sqlcode < 0 ){
+			send_err( m$sql_statment, 0, "PREPARE sql7", NULL, NULL, G_STATION );
+			return_code = ERROR;
+			goto ENDFUNC;
+		}
+
+		G_POSITION = __LINE__;
+		EXEC SQL DECLARE cur7 CURSOR FOR sql7;
+		if( sqlca.sqlcode < 0 ){
+			send_err( m$sql_statment, 0, "DECLARE cur7", NULL, NULL, G_STATION );
+			return_code = ERROR;
+			goto ENDFUNC;
+		}
+
+		G_POSITION = __LINE__;
+		EXEC SQL OPEN cur7;
+		if( sqlca.sqlcode < 0 ){
+			send_err( m$sql_statment, 0, "OPEN cur7", NULL, NULL, G_STATION );
+			return_code = ERROR;
+			goto ENDFUNC;
+		}
+
+		G_POSITION = __LINE__;
+		EXEC SQL FETCH cur7 INTO :work_count;
+		if( sqlca.sqlcode < 0 ){
+			send_err( m$sql_statment, 0, "FETCH cur7", NULL, NULL, G_STATION );
+			EXEC SQL CLOSE cur7;
+			return_code = ERROR;
+			goto ENDFUNC;
+		}
+
+		EXEC SQL CLOSE cur7;
+
+		if( work_count > 0 ){
+			/*
+			** 該当顧客のコールフラグチェック
+			** コールフラグが0・9以外の場合、該当顧客を未コールにUPDATE
+			** コールフラグが0・9の場合は、処理スキップ
+			** 0:未コール
+			** 9:不通
+			*/
+			memset( call_call_flag, 0x00, sizeof(call_call_flag) );
+			memset( sqlcmd, 0x00, sizeof( sqlcmd ) );
+
+			strcpy( sqlcmd, "SELECT コールフラグ FROM " );
+			strcat( sqlcmd, call_list_name );
+			strcat( sqlcmd, " " );
+			strcat( sqlcmd, "WHERE" );
+			if( strcmp( G_KOKYAKU_KEY, CMF_JOIN ) == 0 ){
+				strcat( sqlcmd, " CIFNO = '" );
+				strcat( sqlcmd, call_cif_num );
+				strcat( sqlcmd, "'" );
+			}
+			else {
+				strcat( sqlcmd, " 店番 = '" );
+				strcat( sqlcmd, call_branch_num );
+				strcat( sqlcmd, "' AND CIFNO = '" );
+				strcat( sqlcmd, call_cif_num );
+				strcat( sqlcmd, "'" );
+			}
+
+			G_POSITION = __LINE__;
+			EXEC SQL PREPARE sql8 FROM :sqlcmd;
+			if( sqlca.sqlcode < 0 ){
+				send_err( m$sql_statment, 0, "PREPARE sql8", NULL, NULL, G_STATION );
+				return_code = ERROR;
+				goto ENDFUNC;
+			}
+
+			G_POSITION = __LINE__;
+			EXEC SQL DECLARE cur8 CURSOR FOR sql8;
+			if( sqlca.sqlcode < 0 ){
+				send_err( m$sql_statment, 0, "DECLARE cur8", NULL, NULL, G_STATION );
+				return_code = ERROR;
+				goto ENDFUNC;
+			}
+
+			G_POSITION = __LINE__;
+			EXEC SQL OPEN cur8;
+			if( sqlca.sqlcode < 0 ){
+				send_err( m$sql_statment, 0, "OPEN cur8", NULL, NULL, G_STATION );
+				return_code = ERROR;
+				goto ENDFUNC;
+			}
+
+			G_POSITION = __LINE__;
+			EXEC SQL FETCH cur8 INTO :call_call_flag;
+			if( sqlca.sqlcode < 0 ){
+				send_err( m$sql_statment, 0, "FETCH cur8", NULL, NULL, G_STATION );
+				EXEC SQL CLOSE cur8;
+				return_code = ERROR;
+				goto ENDFUNC;
+			}
+
+			EXEC SQL CLOSE cur8;
+
+			if( strcmp( call_call_flag, "0" ) != 0 && strcmp( call_call_flag, "9" ) != 0 ){
+				memset( sqlcmd, 0x00, sizeof( sqlcmd ) );
+				strcpy( sqlcmd, "UPDATE ");
+				strcat( sqlcmd, call_list_name );
+				strcat( sqlcmd, " SET");
+				strcat( sqlcmd, "  コールフラグ = '0'," );
+				strcat( sqlcmd, "  不通回数 = 0," );
+				strcat( sqlcmd, "  コール日時 = NULL,");
+				strcat( sqlcmd, "  TM担当者 = NULL,");
+				strcat( sqlcmd, "  呼出日時 = NULL,");
+				strcat( sqlcmd, "  確度 = NULL,");
+				strcat( sqlcmd, "  EBM日付 = TO_CHAR( SYSDATE, 'YYYYMMDD' ) " );
+				strcat( sqlcmd, "WHERE");
+				if( strcmp( G_KOKYAKU_KEY, CMF_JOIN ) == 0 ){
+					strcat( sqlcmd, " CIFNO = '" );
+					strcat( sqlcmd, call_cif_num );
+					strcat( sqlcmd, "'" );
+				}
+				else {
+					strcat( sqlcmd, " 店番 = '" );
+					strcat( sqlcmd, call_branch_num );
+					strcat( sqlcmd, "' AND CIFNO = '" );
+					strcat( sqlcmd, call_cif_num );
+					strcat( sqlcmd, "'" );
+				}
+
+				G_POSITION = __LINE__;
+				EXEC SQL EXECUTE IMMEDIATE :sqlcmd;
+				if( sqlca.sqlcode < 0 ){
+					send_err( m$sql_statment, 0, sqlcmd, NULL, NULL, G_STATION );
+					return_code = ERROR;
+					goto ENDFUNC;
+				}
+
+				/*
+				** コール済顧客が未コールに更新された事を通知するため
+				** コールリストを更新したデータは異常処理(警告がないため)として扱う 
+				*/
+				sprintf( cmd_work, "BatchErrorDataEntry %s %s %s %.256s", start_date2, task_name, BE_CALLED_CUST_REDUPLICATION, now_record );
+				send_err( m$message1, 0, cmd_work, NULL, NULL, G_STATION );
+				return_code2 = system( cmd_work );
+				if( return_code2 != 0 ){
+					send_err( m$system, return_code, cmd_work, NULL, NULL, G_STATION );
+				}
+				/* 異常処理件数インクリメント */
+				ebm_error_count++;
+				/* 次ループへ */
+				continue;
+			}
+			else{
+				/*
+				** 未コール顧客がコールリスト投入対象となり処理がスキップされた事を通知するため
+				** 処理スキップしたデータは異常処理(警告がないため)として扱う 
+				*/
+				sprintf( cmd_work, "BatchErrorDataEntry %s %s %s %.256s", start_date2, task_name, BE_UNCALL_CUST_REDUPLICATION, now_record );
+				send_err( m$message1, 0, cmd_work, NULL, NULL, G_STATION );
+				return_code2 = system( cmd_work );
+				if( return_code2 != 0 ){
+					send_err( m$system, return_code, cmd_work, NULL, NULL, G_STATION );
+				}
+				/* 異常処理件数インクリメント */
+				ebm_error_count++;
+				/* 次ループへ */
+				continue;
+			}
+		}
+
+		memset( sqlcmd, 0x00, sizeof( sqlcmd ) );
+		strcpy( sqlcmd, "INSERT INTO ");
+		strcat( sqlcmd, call_list_name );
+		strcat( sqlcmd, " ( 店番, CIFNO, 世帯番号, 対象者数, SEQNO, コールフラグ, " );
+		strcat( sqlcmd, "不通回数, コール日時, TM担当者, 呼出日時, 確度, EBM日付 )" );
+		strcat( sqlcmd, " VALUES ( '" );
+		strcat( sqlcmd, call_branch_num );
+		strcat( sqlcmd, "', '" );
+		strcat( sqlcmd, call_cif_num );
+		strcat( sqlcmd, "', '" );
+		strcat( sqlcmd, call_household_num );
+		strcat( sqlcmd, "', 0, ( SELECT NVL( MAX(SEQNO) + 1, 1 ) FROM " );
+		strcat( sqlcmd, call_list_name );
+		strcat( sqlcmd, "), '0', 0, NULL, NULL, NULL, NULL, TO_CHAR( SYSDATE, 'YYYYMMDD' ) )" );
+
+		G_POSITION = __LINE__;
+		EXEC SQL EXECUTE IMMEDIATE :sqlcmd;
+		if( sqlca.sqlcode < 0 ){
+			send_err( m$sql_statment, 0, sqlcmd, NULL, NULL, G_STATION );
+			return_code = ERROR;
+			goto ENDFUNC;
+		}
+
+		/* TC_キャンペーン顧客データ存在チェック */
+		work_count = 0;
+ 		if( strcmp( G_KOKYAKU_KEY, CMF_JOIN ) == 0 ){
+			EXEC SQL 
+				SELECT
+					COUNT(*)
+				INTO
+					:work_count
+				FROM
+					TC_キャンペーン顧客
+				WHERE
+					センタID = :TSTM_center_id AND
+					キャンペーンID = :TSTM_campaign_id AND
+					CIFNO = :call_cif_num
+				;
+		}
+		else {
+			EXEC SQL 
+				SELECT
+					COUNT(*)
+				INTO
+					:work_count
+				FROM
+					TC_キャンペーン顧客
+				WHERE
+					センタID = :TSTM_center_id AND
+					キャンペーンID = :TSTM_campaign_id AND
+					店番 = :call_branch_num AND
+					CIFNO = :call_cif_num
+				;
+		}
+		if( sqlca.sqlcode < 0 ){
+			send_err( m$sql_statment, 0, "SELECT COUNT(*) TC_キャンペーン顧客", NULL, NULL, G_STATION );
+			return_code = ERROR;
+			goto ENDFUNC;
+		}
+
+		if( work_count == 0 ){
+			G_POSITION = __LINE__;
+			EXEC SQL
+				INSERT INTO
+					TC_キャンペーン顧客
+				(
+					センタID,
+					キャンペーンID,
+					店番,
+					CIFNO,
+					コールデータ名,
+					登録日,
+					登録者
+				) VALUES (
+					:TSTM_center_id,
+					:TSTM_campaign_id,
+					:call_branch_num,
+					:call_cif_num,
+					:call_list_name,
+					SYSDATE,
+					'SPV'
+				);
+			if( sqlca.sqlcode < 0 ){
+				send_err( m$sql_statment, 0, "INSERT TC_キャンペーン顧客", NULL, NULL, G_STATION );
+				return_code = ERROR;
+				goto ENDFUNC;
+			}
+		}
+
+		/* ---------------------------------------------------------- */
+		/* キャンペーンステータス更新処理                             */
+		/* ---------------------------------------------------------- */
+		G_POSITION = __LINE__;
+		EXEC SQL
+			UPDATE
+				TC_キャンペーン属性
+			SET
+				キャンペーンステータス = '2'		/* 2:キャンペーン期間中 */
+			WHERE
+				センタID = :TSTM_center_id AND
+				キャンペーンID = :TSTM_campaign_id AND
+				キャンペーンステータス = '1' AND	/* 1:配分済み */
+				キャンペーン種類 = '1'				/* 1:EBMキャンペーン */
+			;
+		if( sqlca.sqlcode < 0 ){
+			send_err( m$sql_statment, 0, "UPDATE TC_キャンペーン属性 キャンペーンステータス", NULL, NULL, G_STATION );
+			return_code = ERROR;
+			goto ENDFUNC;
+		}
+
+
+		/* ---------------------------------------------------------- */
+		/* 配分件数更新処理                                           */
+		/* ---------------------------------------------------------- */
+		/* TC_キャンペーン属性の更新 */
+		G_POSITION = __LINE__;
+		EXEC SQL
+			UPDATE
+				TC_キャンペーン属性
+			SET
+				配分件数 = 配分件数 + 1
+			WHERE
+				センタID = :TSTM_center_id AND
+				キャンペーンID = :TSTM_campaign_id AND
+				キャンペーンステータス = '2' AND	/* 2:キャンペーン期間中 */
+				キャンペーン種類 = '1'				/* 1:EBMキャンペーン */
+			;
+		if( sqlca.sqlcode < 0 ){
+			send_err( m$sql_statment, 0, "UPDATE TC_キャンペーン属性 配分件数", NULL, NULL, G_STATION );
+			return_code = ERROR;
+			goto ENDFUNC;
+		}
+
+		/* TC_キャンペーンTSRの更新 */
+		G_POSITION = __LINE__;
+		EXEC SQL
+			UPDATE
+				TC_キャンペーンTSR
+			SET
+				配分件数 = 配分件数 + 1
+			WHERE
+				センタID = :TSTM_center_id AND
+				キャンペーンID = :TSTM_campaign_id AND
+				担当区分 = '1'			/* 通常担当 */
+			;
+		if( sqlca.sqlcode < 0 ){
+			send_err( m$sql_statment, 0, "UPDATE TC_キャンペーンTSR", NULL, NULL, G_STATION );
+				return_code = ERROR;
+				goto ENDFUNC;
+		}
+
+		/* 正常処理件数インクリメント */
+		ebm_success_count++;
+	}
+
+ENDFUNC:
+	/* カーソル６クローズ */
+	if( cur6_open_flag == 1 ){
+		EXEC SQL CLOSE cur6;
+	}
+
+	return(return_code);
+}
