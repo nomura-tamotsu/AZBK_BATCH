@@ -24,6 +24,7 @@
 /* Mod   yy/mm/dd   Coder           Comment                                 */
 /*-----+----------+-------------+-------------------------------------------*/
 /* %00 | 09/06/25 | K.Miyahara  | First Edition.                            */
+/* %01 | 15/01/15 | K.Doi       | あおぞら1.0次対応                         */
 /*==========================================================================*/
 /*--------------------------------------------------------------------------*/
 /* Standard include specification                                           */
@@ -43,23 +44,10 @@ EXEC SQL INCLUDE mbproc.h;
 /*--------------------------------------------------------------------------*/
 /*                            DEFINE STATEMENTS                             */
 /*--------------------------------------------------------------------------*/
-#define TB_COUNT 9
 
 /*--------------------------------------------------------------------------*/
 /*                            EXTERNAL DECLARES                             */
 /*--------------------------------------------------------------------------*/
-char tb_list[TB_COUNT][128] = {
-	"TF_顧客属性",
-	"TF_世帯属性",
-	"TF_個別明細流動性預金",
-	"TF_個別明細固定性預金",
-	"TF_個別明細外貨預金",
-	"TF_個別明細投信口座",
-	"TF_個別明細投信口座明細",
-	"TF_個別明細債券",
-	"TF_住所"
-};
-
 EXEC SQL BEGIN DECLARE SECTION;
     long        record_cnt;
 	char        sqlcmd[1024];                   
@@ -91,7 +79,9 @@ extern void errhandler();
 /*--------------------------------------------------------------------------*/
 /*                              MAIN ROUTINE                                */
 /*--------------------------------------------------------------------------*/
-main()
+main( argc, argv )
+    int     argc;
+    char    *argv[];
 {
 /*--------------------------------------------------------------------------*/
 /*                      LOCAL VARIABLE DECLARATIONS                         */
@@ -99,8 +89,7 @@ main()
     int     rc;
     int     exitcode;
 	int		db_connect_flag;
-	int		i;
-
+    char    table_name[33];
 
 /*==========================================================================*/
 /*      INITIALIZATION                                                      */
@@ -123,6 +112,19 @@ main()
 
     send_err( m$start_process, NORMAL, process_name, "", "", G_STATION );
 
+    /*--------------*/
+    /* Set Argument */
+    /*--------------*/
+	memset ( table_name, 0x00, sizeof( table_name ) );
+
+    if ( argc == 2 ) {
+		strncpy ( table_name, argv[1], sizeof( table_name ));
+    }
+	else  {
+        send_err( m$unmatch_parameter_count, NORMAL, "", "", "", G_STATION );
+        exitcode = ERROR;
+        goto ENDPROC ;
+    }
 
 
     /*-----------------------------*/
@@ -147,97 +149,88 @@ main()
     /*                      メ　イ　ン　処　理                              */
     /*======================================================================*/
 
-	for ( i = 0; i < TB_COUNT ; i++ ) {
-		memset ( table_name, 0x0, sizeof( table_name ) );
-		strcpy ( table_name, tb_list[i] );
+	/* テーブル件数の取得 */
+	memset ( sqlcmd, 0x0, sizeof(sqlcmd) );
+	strcpy ( sqlcmd, "begin ");
+	strcat ( sqlcmd, "SELECT COUNT(*) ");
+	strcat ( sqlcmd, "INTO  :record_cnt from ");
+	sprintf( g_work, "%s ;", table_name );
+	strcat ( sqlcmd, g_work);
+	strcat ( sqlcmd, "end; ");
 
-		/* テーブル件数の取得 */
-		memset ( sqlcmd, 0x0, sizeof(sqlcmd) );
-		strcpy ( sqlcmd, "begin ");
-		strcat ( sqlcmd, "SELECT COUNT(*) ");
-		strcat ( sqlcmd, "INTO  :record_cnt from ");
-		sprintf( g_work, "%s ;", table_name );
-		strcat ( sqlcmd, g_work);
-		strcat ( sqlcmd, "end; ");
+	/* 動的SQL-SQL文の解析 */
+	G_POSITION = __LINE__;
+	EXEC SQL PREPARE my_stmt01 FROM :sqlcmd;
+	if (sqlca.sqlcode < 0) {
+		sprintf( g_work,
+		        "%s テーブルの件数取得に失敗しました。(sqlca.sqlcode=%d)", table_name,sqlca.sqlcode );
+		send_err ( m$emb_error, -1, g_work, NULL, NULL, G_STATION);
+		send_err ( m$sql_statment, sqlca.sqlcode, "PREPARE my_stmt01", NULL, NULL, G_STATION);
+		exitcode = ERROR;
+		goto ENDPROC ;
+	}
 
-		/*printf("sqlcmd=[%s]\n",sqlcmd);*/
+	/* テーブル件数の取得 */
+	G_POSITION = __LINE__;
+	EXEC SQL EXECUTE my_stmt01 USING :record_cnt;
 
+	if (sqlca.sqlcode < 0) {
+		sprintf( g_work,
+		        "%s テーブルの件数取得に失敗しました。(sqlca.sqlcode=%d)", table_name,sqlca.sqlcode );
+		send_err ( m$emb_error, -1, g_work, NULL, NULL, G_STATION);
+		send_err ( m$sql_statment, sqlca.sqlcode, "EXECUTE my_stmt01", NULL, NULL, G_STATION);
+		exitcode = ERROR;
+		goto ENDPROC ;
+	}
 
-		/* 動的SQL-SQL文の解析 */
-		G_POSITION = __LINE__;
-		EXEC SQL PREPARE my_stmt01 FROM :sqlcmd;
-		if (sqlca.sqlcode < 0) {
-			sprintf( g_work,
-			        "%s テーブルの件数取得に失敗しました。(sqlca.sqlcode=%d)", table_name,sqlca.sqlcode );
-			send_err ( m$emb_error, -1, g_work, NULL, NULL, G_STATION);
-			send_err ( m$sql_statment, sqlca.sqlcode, "PREPARE my_stmt01", NULL, NULL, G_STATION);
-			exitcode = ERROR;
-			goto ENDPROC ;
-		}
+	G_POSITION = __LINE__;
+	EXEC SQL 
+		UPDATE 
+			TX_ローディング情報
+		SET 
+			データ件数 = :record_cnt,
+			作成日付 = SYSDATE,
+			データ基準日 = SYSDATE
+		WHERE 
+		テーブル名 = :table_name
+		;
+	if( sqlca.sqlcode < 0 ){
+		sprintf( g_work,
+		        "%s テーブルのUDPATEに失敗しました。(sqlca.sqlcode=%d)", table_name,sqlca.sqlcode );
+		send_err ( m$emb_error, -1, g_work, NULL, NULL, G_STATION);
+		send_err( m$sql_statment, sqlca.sqlcode, "UPDATE TX_ローディング情報", NULL, NULL, G_STATION );
+		exitcode = ERROR;
+		goto ENDPROC ;
+	}
 
-		/* テーブル件数の取得 */
-		G_POSITION = __LINE__;
-		EXEC SQL EXECUTE my_stmt01 USING :record_cnt;
-
-		if (sqlca.sqlcode < 0) {
-			sprintf( g_work,
-			        "%s テーブルの件数取得に失敗しました。(sqlca.sqlcode=%d)", table_name,sqlca.sqlcode );
-			send_err ( m$emb_error, -1, g_work, NULL, NULL, G_STATION);
-			send_err ( m$sql_statment, sqlca.sqlcode, "EXECUTE my_stmt01", NULL, NULL, G_STATION);
-			exitcode = ERROR;
-			goto ENDPROC ;
-		}
-
+	if( sqlca.sqlcode == ORA_NOF ) {
 		G_POSITION = __LINE__;
 		EXEC SQL 
-			UPDATE 
+			INSERT INTO 
 				TX_ローディング情報
-			SET 
-				データ件数 = :record_cnt,
-				作成日付 = SYSDATE,
-				データ基準日 = SYSDATE
-			WHERE 
-			テーブル名 = :table_name
-			;
+			(
+				テーブル名,
+				状態区分,
+				データ件数,
+				作成日付,
+				データ基準日
+			) VALUES (
+				:table_name,
+				'0',
+				:record_cnt,
+				SYSDATE,
+				SYSDATE
+			);
 		if( sqlca.sqlcode < 0 ){
 			sprintf( g_work,
-			        "%s テーブルのUDPATEに失敗しました。(sqlca.sqlcode=%d)", table_name,sqlca.sqlcode );
+		        "%s テーブルのINSERTに失敗しました。(sqlca.sqlcode=%d)", table_name,sqlca.sqlcode );
 			send_err ( m$emb_error, -1, g_work, NULL, NULL, G_STATION);
-			send_err( m$sql_statment, sqlca.sqlcode, "UPDATE TX_ローディング情報", NULL, NULL, G_STATION );
+			send_err( m$sql_statment, sqlca.sqlcode, "INSERT TX_ローディング情報", NULL, NULL, G_STATION );
 			exitcode = ERROR;
 			goto ENDPROC ;
 		}
+	}
 
-		if( sqlca.sqlcode == ORA_NOF ) {
-			G_POSITION = __LINE__;
-			EXEC SQL 
-				INSERT INTO 
-					TX_ローディング情報
-				(
-					テーブル名,
-					状態区分,
-					データ件数,
-					作成日付,
-					データ基準日
-				) VALUES (
-					:table_name,
-					'0',
-					:record_cnt,
-					SYSDATE,
-					SYSDATE
-				);
-			if( sqlca.sqlcode < 0 ){
-				sprintf( g_work,
-			        "%s テーブルのINSERTに失敗しました。(sqlca.sqlcode=%d)", table_name,sqlca.sqlcode );
-				send_err ( m$emb_error, -1, g_work, NULL, NULL, G_STATION);
-				send_err( m$sql_statment, sqlca.sqlcode, "INSERT TX_ローディング情報", NULL, NULL, G_STATION );
-				exitcode = ERROR;
-				goto ENDPROC ;
-			}
-		}
-
-
-	} /* loop end */
 
 
     /*--------------------------------------------------------------------------*/
