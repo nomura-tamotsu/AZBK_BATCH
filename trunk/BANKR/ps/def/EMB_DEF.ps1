@@ -8,8 +8,9 @@
 #
 # Mod   yy/mm/dd   Coder           Comment
 #-----+----------+---------------+-------------------------------------------
-# %00 | 13/10/XX | ISID          | First Edition.               
-# %01 | 14/06/24 | ISID          | Error Code 追加                  
+# %00 | 13/10/XX | ISID          | First Edition.
+# %01 | 14/06/24 | ISID          | Error Code 追加
+# %02 | 15/01/14 | 土居　康一郎  | あおぞら銀行 1.0次対応
 #============================================================================
 
 # ============================================================================
@@ -43,7 +44,7 @@ $global:ORACLE_TNS=$env:oracle_tns
 # ディレクトリ定義
 # ============================================================================
 # クラスタログディレクトリ
-$global:CLLOG_DIR="E:\CLlog\azbk\BANKR"
+$global:CLLOG_DIR="E:\CLlog\azbk\BANKRAZB"
 # ログディレクトリ
 $global:LOG_DIR="$global:CLLOG_DIR\error"
 # スクリプトディレクトリ
@@ -157,27 +158,27 @@ $global:DAILY_END_FILE="$global:EXT_LOAD_DIR\D_END.dat"
 
 # 各データファイル名(拡張子なし)
 $global:M_END_BASE="M_END"
-$global:M_ADDRESS_BASE="M_Z07"         		# 住所ファイル
-$global:M_BANK_BASE="W_BBR"			# 全銀データ（金融機関支店ファイル）
+$global:M_ADDRESS_BASE="M_Z07"              # 住所ファイル
+$global:M_BANK_BASE="W_BBR"         # 全銀データ（金融機関支店ファイル）
 
 
-$global:M_FOREIGN_BASE       ="D_KGS"   	# 外貨預金ファイル
-$global:M_FUND_BASE          ="D_Z05"  		# 投信データファイル
-$global:M_FUND_DETAIL_BASE   ="D_KTM"         	# 投信明細データファイル
-$global:M_PRODUCT_BASE       ="D_PRD"         	# 商品ファイル
+$global:M_FOREIGN_BASE       ="D_KGS"       # 外貨預金ファイル
+$global:M_FUND_BASE          ="D_Z05"       # 投信データファイル
+$global:M_FUND_DETAIL_BASE   ="D_KTM"           # 投信明細データファイル
+$global:M_PRODUCT_BASE       ="D_PRD"           # 商品ファイル
 
-$global:M_CUSTOMER_BASE      ="D_ZKS"		# 顧客属性差分ファイル
-$global:M_HOUSEHOLD_BASE     ="D_SZS"		# 世帯属性差分ファイル
-$global:M_TDEPOSIT_BASE      ="D_KKS"		# 定期性預金差分ファイル
-$global:M_LDEPOSIT_BASE      ="D_KRS"		# 流動性預金差分ファイル
-$global:M_DEBENTURE_BASE     ="D_KSS"		# 債券差分ファイル
-$global:M_PERSONNEL_BASE     ="D_JIF"		# 人事情報ファイル
-$global:M_PROFILE_BASE       ="D_PRO"		# 顧客プロファイル
-$global:M_BHISTORY_BASE      ="D_LGD"		# 営業店コンタクト履歴ファイル
+$global:M_CUSTOMER_BASE      ="D_ZKS"       # 顧客属性ファイル
+$global:M_HOUSEHOLD_BASE     ="D_SZS"       # 世帯属性ファイル
+$global:M_TERM_DEPOSIT_BASE    ="D_KKS"     # 定期性預金ファイル
+$global:M_LIQUID_DEPOSIT_BASE  ="D_KRS"     # 流動性預金ファイル
+# $global:M_DEBENTURE_BASE     ="D_KSS"     # 債券差分ファイル (1.0次にて 削除)
+$global:M_PERSONNEL_BASE     ="D_JIF"       # 人事情報ファイル
+$global:M_PROFILE_BASE       ="D_PRO"       # 顧客プロファイル
+$global:M_BHISTORY_BASE      ="D_LGD"       # 営業店コンタクト履歴ファイル
 
-$global:M_OPEINFO_BASE       ="S_IB1"		# オペレータ情報ファイル
-$global:M_CONTRACT_BASE      ="S_CZU"		# テレバン契約属性ファイル
-$global:M_CONTACT_BASE       ="S_LCU"		# コンタクト履歴ファイル
+$global:M_OPEINFO_BASE       ="S_IB1"       # オペレータ情報ファイル
+$global:M_CONTRACT_BASE      ="S_CZU"       # テレバン契約属性ファイル
+$global:M_CONTACT_BASE       ="S_LCU"       # コンタクト履歴ファイル
 
 
 # 未使用
@@ -200,13 +201,14 @@ $global:SQL_VIEW_FOREIGN_BASE="view_tf_05"
 $global:SQL_VIEW_FUND_BASE="view_tf_07"
 $global:SQL_VIEW_FUND_DETAIL_BASE="view_tf_08"
 $global:SQL_VIEW_PRODUCT_BASE="view_tf_10"
+$global:SQL_VIEW_CUSTOMER_BASE="view_tf_01"  # TF_顧客属性　(1.0次 追加)
+$global:SQL_VIEW_HOUSEHOLD_BASE="view_tf_02"    # TF_世帯属性　(1.0次 追加)
+$global:SQL_VIEW_TERM_DEPOSIT_BASE="view_tf_03"    # TF_個別明細固定性預金　(1.0次 追加)
+$global:SQL_VIEW_LIQUID_DEPOSIT_BASE="view_tf_04"    # TF_個別明細流動性預金　(1.0次 追加)
 
 
 # 未使用
-$global:SQL_VIEW_KOKYAKU_BASE="" 
-$global:SQL_VIEW_SETAI_BASE=""
-$global:SQL_VIEW_KOTEI_BASE=""
-$global:SQL_VIEW_RYUDO_BASE=""
+$global:SQL_VIEW_KOKYAKU_BASE="view_tf_01"
 $global:SQL_VIEW_LOAN_BASE=""
 
 
@@ -219,8 +221,13 @@ $global:TABLE_SUFFIX_B="B"
 $global:LOADER_ERROR=1
 
 #
-# ビュー名称(ITa用に設定)
+# ビュー名称
 #
+$global:CUSTOMER_BASE_VIEWNAME   ="TF_顧客属性"                  # (1.0次 追加)
+$global:HOUSEHOLD_BASE_VIEWNAME ="TF_世帯属性"                  # (1.0次 追加)
+$global:TERM_DEPOSIT_BASE_VIEWNAME ="TF_個別明細固定性預金" 　  # (1.0次 追加)
+$global:LIQUID_DEPOSIT_BASE_VIEWNAME ="TF_個別明細流動性預金"   # (1.0次 追加)
+
 $global:ADDRESS_VIEWNAME="TF_住所"
 $global:JBANK_VIEWNAME="TMB_全銀"
 $global:JBANK_BASE_TBNAME ="TMB_銀行"
@@ -231,11 +238,11 @@ $global:FUND_VIEWNAME="TF_個別明細投信口座"
 $global:FUND_DETAIL_VIEWNAME="TF_個別明細投信口座明細"
 $global:PRODUCT_VIEWNAME="TF_商品"
 
-$global:CUTOMER_BASE_TBNAME   ="TF_顧客属性"
-$global:HOUSEHOLD_BASE_TBNAME ="TF_世帯属性"
-$global:TERM_DEPOSIT_BASE_TBNAME ="TF_個別明細固定性預金"
-$global:LIQUID_DEPOSIT_BASE_TBNAME ="TF_個別明細流動性預金"
-$global:DEBENTURE_BASE_TBNAME ="TF_個別明細債券"
+# $global:CUTOMER_BASE_TBNAME   ="TF_顧客属性"   (1.0次 VIEWに変更)
+# $global:HOUSEHOLD_BASE_TBNAME ="TF_世帯属性"   (1.0次 VIEWに変更)
+# $global:TERM_DEPOSIT_BASE_TBNAME ="TF_個別明細固定性預金"    (1.0次 VIEWに変更)
+# $global:LIQUID_DEPOSIT_BASE_TBNAME ="TF_個別明細流動性預金"  (1.0次 VIEWに変更)
+# $global:DEBENTURE_BASE_TBNAME ="TF_個別明細債券" (1.0次 削除)
 $global:PERSONNEL_BASE_TBNAME ="TM_ユーザ"
 $global:PROFILE_BASE_TBNAME ="TF_顧客プロファイル"
 $global:BHISTROY_BASE_TBNAME ="TH_営業店履歴"
