@@ -15,7 +15,8 @@
 #
 # Mod   yy/mm/dd   Coder           Comment
 #-----+----------+---------------+-------------------------------------------
-# %00 | 14/04/02 | ISID        | First Edition.                            
+# %00 | 14/04/02 | ISID          | First Edition.
+# %00 | 15/01/19 | 土居 康一郎   | 1.0次対応 ローディング情報更新を追加
 #============================================================================
 #============================================================================
 # 関数名        mb_fund_load-End-Function
@@ -26,22 +27,22 @@
 # 戻り値型      なし
 #============================================================================
 function local:mb_fund_load-End-Function () {
-	
-	#
-	# このPSのEXITCODEをセーブ
-	#
-	$local_exit_code = $exit_code
 
-	if ( $exit_code -eq $RC_OK ) {
+    #
+    # このPSのEXITCODEをセーブ
+    #
+    $local_exit_code = $exit_code
 
-		. $OUTMSG_CMD $NORMAL_END_MSG $exit_code $JOB_NAME
-	}
-	else {
+    if ( $exit_code -eq $RC_OK ) {
 
-		. $OUTMSG_CMD $ERROR_END_MSG $exit_code $JOB_NAME
-	}
+        . $OUTMSG_CMD $NORMAL_END_MSG $exit_code $JOB_NAME
+    }
+    else {
 
-	exit $local_exit_code	
+        . $OUTMSG_CMD $ERROR_END_MSG $exit_code $JOB_NAME
+    }
+
+    exit $local_exit_code
 }
 
 #
@@ -84,11 +85,11 @@ $VIEW_NAME = $FUND_VIEWNAME
 # 投信データファイル存在チェック
 #---------------------------------------
 if ( -not ( Test-Path $FUND_DATA_FILE ) ) {
-	# ファイル存在チェックエラーメッセージ
-	. $OUTMSG_CMD $FILE_NOT_EXIST_MSG $RC_NG $FUND_DATA_FILE
+    # ファイル存在チェックエラーメッセージ
+    . $OUTMSG_CMD $FILE_NOT_EXIST_MSG $RC_NG $FUND_DATA_FILE
 
-	$exit_code = $RC_NG
-	mb_fund_load-End-Function
+    $exit_code = $RC_NG
+    mb_fund_load-End-Function
 }
 
 #---------------------------------------
@@ -98,11 +99,11 @@ $filesize=$(Get-ChildItem $FUND_DATA_FILE).Length
 
 #　ファイルサイズが 0 バイトの場合はエラー
 if ( $filesize  -eq 0 ) {
-	$ADD_MSG = "ファイルサイズが 0 バイトです("+ $FUND_DATA_FILE + ")"
+    $ADD_MSG = "ファイルサイズが 0 バイトです("+ $FUND_DATA_FILE + ")"
 
-	. $OUTMSG_CMD $COM_ERROR $RC_NG $ADD_MSG
-	$exit_code = $RC_NG
-	mb_fund_load-End-Function
+    . $OUTMSG_CMD $COM_ERROR $RC_NG $ADD_MSG
+    $exit_code = $RC_NG
+    mb_fund_load-End-Function
 }
 
 #-------------------------------------------------------------------------------
@@ -128,17 +129,17 @@ $process.Close()
 
 $TARGET_VIEW_BASE = $SQL_VIEW_FUND_BASE
 if ( $ret -eq $VIEW_A ) {
-	$TARGET_SUFFIX = $TABLE_SUFFIX_B
-	$TARGE_VIEW    = $VIEW_B
+    $TARGET_SUFFIX = $TABLE_SUFFIX_B
+    $TARGE_VIEW    = $VIEW_B
 }
 elseif ( $ret -eq $VIEW_B ) {
-	$TARGET_SUFFIX = $TABLE_SUFFIX_A
-	$TARGE_VIEW    = $VIEW_A
+    $TARGET_SUFFIX = $TABLE_SUFFIX_A
+    $TARGE_VIEW    = $VIEW_A
 }
 else {
-	. $OUTMSG_CMD $COM_ERROR $RC_NG "ビューチェック処理でエラーが発生しました"
-	$exit_code = $RC_NG
-	mb_fund_load-End-Function
+    . $OUTMSG_CMD $COM_ERROR $RC_NG "ビューチェック処理でエラーが発生しました"
+    $exit_code = $RC_NG
+    mb_fund_load-End-Function
 }
 
 #---------------------------------------
@@ -176,9 +177,9 @@ $LOAD_LOG_FILE = $TMP_DIR + "\" + $M_BASE_NAME + ".log"
 $rc = mb_load_external_data  $CTL_FILE $DAT_FILE $BAD_FILE $DIS_FILE $LOAD_LOG_FILE
 
 if ( $rc -ne $RC_OK ) {
-       	. $OUTMSG_CMD $COM_ERROR $RC_NG "ロード実行でエラーが発生しました"
-	$exit_code = $RC_NG
-	mb_fund_load-End-Function
+        . $OUTMSG_CMD $COM_ERROR $RC_NG "ロード実行でエラーが発生しました"
+    $exit_code = $RC_NG
+    mb_fund_load-End-Function
 
 }
 
@@ -192,9 +193,9 @@ $rc=AnalyzeTables $TABLE_NAME
 $ret=$?
 
 if ( $ret -ne "True" ) {
-       	. $OUTMSG_CMD $COM_ERROR $RC_NG "Analyzeでエラーが発生しました($TABLE_NAME)"
-	$exit_code = $RC_NG
-	mb_fund_load-End-Function
+        . $OUTMSG_CMD $COM_ERROR $RC_NG "Analyzeでエラーが発生しました($TABLE_NAME)"
+    $exit_code = $RC_NG
+    mb_fund_load-End-Function
 
 }
 
@@ -203,12 +204,24 @@ if ( $ret -ne "True" ) {
 #---------------------------------------
 $rc = mb_create_view  $TARGET_VIEW_BASE $TARGE_VIEW
 if ( $rc -ne $RC_OK ) {
-       	. $OUTMSG_CMD $COM_ERROR $RC_NG "ビュー切り替えでエラーが発生しました($TABLE_NAME)"
-	$exit_code = $RC_NG
-	mb_fund_load-End-Function
+        . $OUTMSG_CMD $COM_ERROR $RC_NG "ビュー切り替えでエラーが発生しました($TABLE_NAME)"
+    $exit_code = $RC_NG
+    mb_fund_load-End-Function
 
 }
 
+#---------------------------------------
+# ローディング情報の更新
+#---------------------------------------
+$rc=LoadingInfomation $VIEW_NAME
+$ret=$?
+
+if ( $ret -ne "True" ) {
+        . $OUTMSG_CMD $COM_ERROR $RC_NG "ローディング情報更新でエラーが発生しました($VIEW_NAME)"
+    $exit_code = $RC_NG
+    mb_attribute_load-End-Function
+
+}
 
 
 #
@@ -231,9 +244,9 @@ $new_file_name = $EXT_LOAD_BACKUP_DIR + "\" + $new_file_name + "." + $date +$tim
 $rc = Move-Item $FUND_DATA_FILE $new_file_name -force 2>&1
 $ret=$?
 if ( $ret -ne "TRUE" ) {
-       	. $OUTMSG_CMD $COM_ERROR $RC_NG "ロードファイル退避($FUND_DATA_FILE)でエラーが発生しました"
-	$exit_code=$RC_NG
-	mb_fund_load-End-Function
+        . $OUTMSG_CMD $COM_ERROR $RC_NG "ロードファイル退避($FUND_DATA_FILE)でエラーが発生しました"
+    $exit_code=$RC_NG
+    mb_fund_load-End-Function
 }
 
 
