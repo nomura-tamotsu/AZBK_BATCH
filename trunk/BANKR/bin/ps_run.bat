@@ -2,22 +2,23 @@
 rem ============================================================================
 rem  Copyright　Information Services International-Dentsu, Ltd.
 rem ============================================================================
-rem 
+rem
 rem  SYSTEM        : BANK・R－CC
-rem 
+rem
 rem  PROGRAM NAME  : PowerShell プログラム起動
-rem 
+rem
 rem  MODULE NAME   : ps_run.bat
-rem 
+rem
 rem  INPUT         : 可変
-rem 
+rem
 rem  EXIT          : PowerShellの $LASTEXITCODE
-rem                  正常終了 ・・・ NORMAL(0)　
+rem                  正常終了 ・・・ NORMAL(0)
 rem                  異常終了 ・・・ ERROR (9)
-rem 
+rem
 rem  Mod   yy/mm/dd   Coder           Comment
 rem -----+----------+---------------+-------------------------------------------
 rem  %00 | 14/05/14 | ISID          | First Edition.
+rem  %01 | 15/01/19 | 土居 康一郎   | 1.0次対応 パス名を変更
 rem ============================================================================
 
 rem ============================================================================
@@ -32,14 +33,14 @@ setlocal
 rem ---------------------------------------
 rem  環境変数のセット
 rem ---------------------------------------
-call E:\azbk\BANKR\env\env_azbk.bat
+call E:\azbk\BANKRAZB\env\env_azbk.bat
 
 rem ---------------------------------------
 rem  起動用環境変数セット
 rem ---------------------------------------
 set POWERSHELL=C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe
 set EXIT_PROC=;exit $LASTEXITCODE
-set PS_PATH=E:\azbk\BANKR\ps\
+set PS_PATH=E:\azbk\BANKRAZB\ps\
 set SUFFIX=.ps1
 
 rem ---------------------------------------
@@ -52,13 +53,13 @@ rem ============================================================================
 rem  プログラム引数取得
 rem ============================================================================
 set MYPARM=
-set SPACE= 
+set SPACE=
 
 :check
-	if "%1"=="" goto final
-	set MYPARM=%MYPARM%%SPACE%%1 
-	shift
-	goto check
+    if "%1"=="" goto final
+    set MYPARM=%MYPARM%%SPACE%%1
+    shift
+    goto check
 :final
 
 
