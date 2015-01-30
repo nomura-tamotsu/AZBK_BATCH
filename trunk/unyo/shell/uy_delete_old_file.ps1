@@ -15,6 +15,7 @@
 # Mod   yy/mm/dd   Coder           Comment
 #-----+----------+---------------+-------------------------------------------
 # %00 | 14/03/14 | R.YAMANO      | First Eddition
+# %01 | 15/01/27 | R.YAMANO      | 対象ファイル キー置換処理追加
 #============================================================================
 #--------------------------------------------
 # Get Parameter Information
@@ -133,6 +134,10 @@ foreach ( ${LC_LINE01} in Get-Content ${DELETE_FILE_DEF} | Select-String -NotMat
         continue
     }
 
+    # 削除対象ファイル キー置換処理 (ADD 2015/01/27)
+    if ( ${TG_SORCE_FILE} | Select-String -Pattern "@@.....@@" -Quiet ) {
+        ${TG_SORCE_FILE} = FC_ReplaceString "${TG_SORCE_FILE}" -tdate ${PRM_ReRunDay}
+    }
     # 削除対象ファイル抽出
     ${TG_SORCE_DIFI} = "${TG_SORCE_DIRS}" + "${TG_SORCE_FILE}"
 

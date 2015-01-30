@@ -16,6 +16,7 @@
 #-----+----------+---------------+-------------------------------------------
 # %00 | 07/01/19 | R.YAMANO      | First  Eddition
 # %01 | 07/07/01 | R.YAMANO      | Second Eddition
+# %02 | 15/01/27 | R.YAMANO      | 対象ファイル キー置換処理追加
 #============================================================================
 #--------------------------------------------
 # Get Parameter Information
@@ -158,6 +159,10 @@ foreach ( ${LC_LINE01} in Get-Content ${RENAME_FILE_DEF} | Select-String -NotMat
         continue
     }
 
+    # リネーム対象ファイル キー置換処理 (ADD 2015/01/27)
+    if ( ${TG_SORCE_FILE} | Select-String -Pattern "@@.....@@" -Quiet ) {
+        ${TG_SORCE_FILE} = FC_ReplaceString "${TG_SORCE_FILE}" -tdate ${PRM_ReRunDay}
+    }
     # リネーム対象ファイル抽出
     ${TG_SORCE_DIFI} = "${TG_SORCE_DIRS}" + "${TG_SORCE_FILE}"
     ${TG_FIND_FILES} = @(Get-ChildItem ${TG_SORCE_DIFI})
