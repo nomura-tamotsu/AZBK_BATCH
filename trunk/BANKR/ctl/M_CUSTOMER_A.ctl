@@ -12,6 +12,7 @@
 --  %00 | 15/01/14 | 土居 康一郎 | あおぞら銀行 1.0次 First Eddition
 --  %01 | 15/01/21 | 土居 康一郎 | ファイル上の長さより有効桁が少ない項目の切り出し位置を修正
 --  %02 | 15/01/29 | 土居 康一郎 | 連絡先補助住所 100→60Bytesに修正
+--  %03 | 15/01/30 | 土居 康一郎 | 有効桁を越える部分は切り捨ててロード
 -- ============================================================================
 
 OPTIONS (direct=true,errors=100)
@@ -31,7 +32,7 @@ CIFNO                   POSITION (   4:13  )    CHAR,
 住所コード              POSITION ( 206:216 )    CHAR,
 郵便番号                POSITION ( 217:226 )    CHAR,
 補助住所                POSITION ( 227:326 )    CHAR,
-補助住所カナ            POSITION ( 327:426 )    CHAR,
+補助住所カナ            POSITION ( 327:386 )    CHAR,
 自宅電話番号            POSITION ( 447:461 )    CHAR,
 自宅FAX番号             POSITION ( 467:481 )    CHAR,
 携帯電話番号            POSITION ( 487:501 )    CHAR,
@@ -42,7 +43,7 @@ MAILアドレス            POSITION ( 507:556 )    CHAR,
 連絡先住所コード        POSITION ( 737:747 )    CHAR,
 連絡先郵便番号          POSITION ( 748:757 )    CHAR,
 連絡先補助住所          POSITION ( 758:817 )    CHAR,
-連絡先補助住所カナ      POSITION ( 818:917 )    CHAR,
+連絡先補助住所カナ      POSITION ( 818:877 )    CHAR,
 連絡先電話番号          POSITION ( 938:952 )    CHAR,
 連絡先FAX番号           POSITION ( 958:972 )    CHAR,
 日中連絡先電話番号      POSITION ( 978:992 )    CHAR,
@@ -92,7 +93,7 @@ IB契約最終更新日        POSITION (1238:1245)    CHAR,
 自宅住所字丁目カナ      POSITION (1575:1614)    CHAR,
 自宅住所番地気付カナ    POSITION (1615:1698)    CHAR,
 自宅住所                POSITION (1699:1868)    CHAR,
-自宅住所カナ            POSITION (1869:2043)    CHAR,
+自宅住所カナ            POSITION (1869:2038)    CHAR,
 連絡先住所都道府県      POSITION (2044:2053)    CHAR,
 連絡先住所市区町村      POSITION (2054:2077)    CHAR,
 連絡先住所大字通称      POSITION (2078:2113)    CHAR,
@@ -104,7 +105,7 @@ IB契約最終更新日        POSITION (1238:1245)    CHAR,
 連絡先住所字丁目カナ    POSITION (2324:2363)    CHAR,
 連絡先住所番地気付カナ  POSITION (2364:2447)    CHAR,
 連絡先住所              POSITION (2448:2617)    CHAR,
-連絡先住所カナ          POSITION (2618:2792)    CHAR,
+連絡先住所カナ          POSITION (2618:2787)    CHAR,
 データ基準日            POSITION (2793:2800)    CHAR,
 マル優                  POSITION (2801:2801)    CHAR,
 氏名漢字更新フラグ      CONSTANT ' ',
