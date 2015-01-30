@@ -199,6 +199,32 @@ if ( $ret -ne "True" ) {
 }
 
 #---------------------------------------
+# TB契約情報反映(TbContractReflect)
+#---------------------------------------
+$rc=TbContractReflect $TARGET_SUFFIX
+$ret=$?
+
+if ( $ret -ne "True" ) {
+       	. $OUTMSG_CMD $COM_ERROR $RC_NG "TB契約情報反映でエラーが発生しました($TABLE_NAME)"
+	$exit_code = $RC_NG
+	mb_attribute_load-End-Function
+
+}
+
+#---------------------------------------
+# 未取引先反映(TbContractReflect)
+#---------------------------------------
+$rc=NoDealCustReflect $TARGET_SUFFIX
+$ret=$?
+
+if ( $ret -ne "True" ) {
+       	. $OUTMSG_CMD $COM_ERROR $RC_NG "未取引先反映でエラーが発生しました($TABLE_NAME)"
+	$exit_code = $RC_NG
+	mb_attribute_load-End-Function
+
+}
+
+#---------------------------------------
 # ビュー切り替え
 #---------------------------------------
 $rc = mb_create_view  $TARGET_VIEW_BASE $TARGE_VIEW
