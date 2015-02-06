@@ -11,6 +11,7 @@
 /* Mod   yy/mm/dd   Coder           Comment                                 */
 /*-----+----------+-------------+-------------------------------------------*/
 /* %00 | 14/04/08 | ISID        | First Edition.                            */
+/* %02 | 15/01/30 | 土居 康一郎 | あおぞら1.0次対応                         */
 /*==========================================================================*/
 EXEC SQL BEGIN DECLARE SECTION;
     /* 店番 */
@@ -80,7 +81,10 @@ EXEC SQL BEGIN DECLARE SECTION;
     /* 補助住所 */
     /*struct { short len; char arr[60+1]; }
                 TMKZs_hojo_jyusyo;*/
-	varchar		TMKZs_hojo_jyusyo[70+1];
+/* %02 1.0次対応 EditStart */
+//	varchar		TMKZs_hojo_jyusyo[70+1];
+	varchar		TMKZs_hojo_jyusyo[100+1];
+/* %02 Edit End */
     short       TMKZsi_hojo_jyusyo;
 
     /* 住所変更フラグ */
@@ -91,7 +95,10 @@ EXEC SQL BEGIN DECLARE SECTION;
     /* 補助住所カナ */
     /*struct { short len; char arr[120+1]; }
                 TMKZs_hojo_jyusyo_kana;*/
-	varchar		TMKZs_hojo_jyusyo_kana[70+1];
+/* %02 1.0次対応 EditStart */
+//	varchar		TMKZs_hojo_jyusyo_kana[70+1];
+	varchar		TMKZs_hojo_jyusyo_kana[100+1];
+/* %02 Edit End */
     short       TMKZsi_hojo_jyusyo_kana;
 
     /* 住所カナ変更フラグ */
@@ -174,7 +181,10 @@ EXEC SQL BEGIN DECLARE SECTION;
     /* 連絡先補助住所 */
     /*struct { short len; char arr[60+1]; }
                 TMKZs_renrakusaki_hojo_jyusyo;*/
-	varchar		TMKZs_renrakusaki_hojo_jyusyo[60+1];
+/* %02 1.0次対応 EditStart */
+//	varchar		TMKZs_renrakusaki_hojo_jyusyo[60+1];
+	varchar		TMKZs_renrakusaki_hojo_jyusyo[100+1];
+/* %02 Edit End */
     short       TMKZsi_renrakusaki_hojo_jyusyo;
 
     /* 連絡先住所変更フラグ */
@@ -184,7 +194,10 @@ EXEC SQL BEGIN DECLARE SECTION;
     /* 連絡先補助住所カナ */
     /*struct { short len; char arr[120+1]; }
                 TMKZs_renrakusaki_hojo_jyusyo_kana;*/
-	varchar		TMKZs_renrakusaki_hojo_jyusyo_kana[120+1];
+/* %02 1.0次対応 EditStart */
+//	varchar		TMKZs_renrakusaki_hojo_jyusyo_kana[120+1];
+	varchar		TMKZs_renrakusaki_hojo_jyusyo_kana[100+1];
+/* %02 Edit End */
     short       TMKZsi_renrakusaki_hojo_jyusyo_kana;
 
     /* 連絡先住所変更フラグ */
@@ -349,8 +362,12 @@ EXEC SQL BEGIN DECLARE SECTION;
     char    TMKZs_IB_accnt_id[4+1];
     short   TMKZsi_IB_accnt_id;
 
-    /* IB契約代表口座口番号 */
-    char    TMKZs_IB_kuchi_no[3+1];
+/* %02 1.0次対応 EditStart */
+//    /* IB契約代表口座口番号 */
+//    char    TMKZs_IB_kuchi_no[3+1];
+    /* IB契約代表口座番号 */
+    char    TMKZs_IB_kuchi_no[15+1];
+/* %02 Edit End */
     short   TMKZsi_IB_kuchi_no;
 
     /* IB契約日 */
@@ -445,17 +462,23 @@ EXEC SQL BEGIN DECLARE SECTION;
 	varchar		TMKZs_adress4[40+1];
     short   TMKZsi_adress4;
 
-    /* 自宅住所番地 */
-    /*struct { short len; char arr[30+1]; }
-            TMKZs_adress5;*/
-	varchar		TMKZs_adress5[30+1];
+/* %02 1.0次対応 EditStart */
+//    /* 自宅住所番地 */
+//    /*struct { short len; char arr[30+1]; }
+//            TMKZs_adress5;*/
+//	varchar		TMKZs_adress5[30+1];
+    /* 自宅住所番地気付 */
+	varchar		TMKZs_adress5[100+1];
+/* %02 Edit End */
     short   TMKZsi_adress5;
 
-    /* 自宅住所気付 */
-    /*struct { short len; char arr[30+1]; }
-            TMKZs_adress6;*/
-	varchar		TMKZs_adress6[30+1];
-    short   TMKZsi_adress6;
+/* %02 1.0次対応 DELETE Start */
+//    /* 自宅住所気付 */
+//    /*struct { short len; char arr[30+1]; }
+//            TMKZs_adress6;*/
+//	varchar		TMKZs_adress6[30+1];
+//    short   TMKZsi_adress6;
+/* %02 1.0次対応 DELETE End */
 
     /* 自宅住所都道府県カナ */
     /*struct { short len; char arr[20+1]; }
@@ -481,17 +504,23 @@ EXEC SQL BEGIN DECLARE SECTION;
 	varchar		TMKZs_adress_kana4[80+1];
     short   TMKZsi_adress_kana4;
 
+/* %02 1.0次対応 EDIT Start */
     /* 自宅住所番地カナ */
     /*struct { short len; char arr[60+1]; }
             TMKZs_adress_kana5;*/
-	varchar		TMKZs_adress_kana5[60+1];
+//	varchar		TMKZs_adress_kana5[60+1];
+    /* 自宅住所番地気付カナ */
+	varchar		TMKZs_adress_kana5[84+1];
+/* %02 Edit End */
     short   TMKZsi_adress_kana5;
 
-    /* 自宅住所気付カナ */
-    /*struct { short len; char arr[60+1]; }
-            TMKZs_adress_kana6;*/
-	varchar		TMKZs_adress_kana6[60+1];
-    short   TMKZsi_adress_kana6;
+/* %02 1.0次対応 DELETE Start */
+//    /* 自宅住所気付カナ */
+//    /*struct { short len; char arr[60+1]; }
+//            TMKZs_adress_kana6;*/
+//	varchar		TMKZs_adress_kana6[60+1];
+//    short   TMKZsi_adress_kana6;
+/* %02 1.0次対応 DELETE End */
 
     /* 自宅住所 */
     /*struct { short len; char arr[170+1]; }
@@ -529,10 +558,14 @@ EXEC SQL BEGIN DECLARE SECTION;
 	varchar		TMKZs_renrakusaki_adress4[40+1];
     short   TMKZsi_renrakusaki_adress4;
 
-    /* 連絡先住所番地 */
-    /*struct { short len; char arr[30+1]; }
-            TMKZs_renrakusaki_adress5;*/
-	varchar		TMKZs_renrakusaki_adress5[30+1];
+/* %02 1.0次対応 EDIT Start */
+//    /* 連絡先住所番地 */
+//    /*struct { short len; char arr[30+1]; }
+//            TMKZs_renrakusaki_adress5;*/
+//	varchar		TMKZs_renrakusaki_adress5[30+1];
+    /* 連絡先住所番地気付 */
+	varchar		TMKZs_renrakusaki_adress5[84+1];
+/* %02 Edit End */
     short   TMKZsi_renrakusaki_adress5;
 
     /* 連絡先住所気付 */
@@ -565,17 +598,23 @@ EXEC SQL BEGIN DECLARE SECTION;
 	varchar		TMKZs_renrakusaki_adress_kana4[80+1];
     short   TMKZsi_renrakusaki_adress_kana4;
 
-    /* 連絡先住所番地カナ */
-    /*struct { short len; char arr[60+1]; }
-            TMKZs_renrakusaki_adress_kana5;*/
-	varchar		TMKZs_renrakusaki_adress_kana5[60+1];
+/* %02 1.0次対応 EDIT Start */
+//    /* 連絡先住所番地カナ */
+//    /*struct { short len; char arr[60+1]; }
+//            TMKZs_renrakusaki_adress_kana5;*/
+//	varchar		TMKZs_renrakusaki_adress_kana5[60+1];
+    /* 連絡先住所番地気付カナ */
+	varchar		TMKZs_renrakusaki_adress_kana5[84+1];
+/* %02 Edit End */
     short   TMKZsi_renrakusaki_adress_kana5;
 
-    /* 連絡先住所気付カナ */
-    /*struct { short len; char arr[60+1]; }
-            TMKZs_renrakusaki_adress_kana6;*/
-	varchar		TMKZs_renrakusaki_adress_kana6[60+1];
-    short   TMKZsi_renrakusaki_adress_kana6;
+/* %02 1.0次対応 DELETE Start */
+//    /* 連絡先住所気付カナ */
+//    /*struct { short len; char arr[60+1]; }
+//            TMKZs_renrakusaki_adress_kana6;*/
+//	varchar		TMKZs_renrakusaki_adress_kana6[60+1];
+//    short   TMKZsi_renrakusaki_adress_kana6;
+/* %02 DELETE End */
 
     /* 連絡先住所 */
     /*struct { short len; char arr[170+1]; }

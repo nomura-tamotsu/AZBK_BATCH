@@ -27,6 +27,7 @@
 /* %01 | 14/03/27 | N.Ogawa     | あおぞら更改対応                          */
 /* %02 | 14/05/12 | ISID        | 属性ID:0013～0016の処理を追加             */
 /* %03 | 14/05/27 | ISID        | 住所変更をeMuSC仕様にあわせる             */
+/* %04 | 15/01/30 | 土居 康一郎 | あおぞら1.0次 住所５分割対応              */
 /*==========================================================================*/
 /*--------------------------------------------------------------------------*/
 /* Standard include specification                                           */
@@ -374,8 +375,10 @@ char	*argv[];
 				strcat( sqlcmd, " 自宅住所市区町村," );
 				strcat( sqlcmd, " 自宅住所大字通称," );
 				strcat( sqlcmd, " 自宅住所字丁目," );
-				strcat( sqlcmd, " 自宅住所番地," );
-				strcat( sqlcmd, " 自宅住所気付," );
+				/* %04 1.0次５分割住所対応 Edit Start */
+				strcat( sqlcmd, " 自宅住所番地気付," );
+				// strcat( sqlcmd, " 自宅住所気付," );
+				/* %04 Edit End */
 				/* %03 Add End */
 
 				strcat( sqlcmd, " 住所変更フラグ " );
@@ -389,8 +392,10 @@ char	*argv[];
 				strcat( sqlcmd, " 自宅住所市区町村カナ," );
 				strcat( sqlcmd, " 自宅住所大字通称カナ," );
 				strcat( sqlcmd, " 自宅住所字丁目カナ," );
-				strcat( sqlcmd, " 自宅住所番地カナ," );
-				strcat( sqlcmd, " 自宅住所気付カナ," );
+				/* %04 1.0次５分割住所対応 Edit Start */
+				strcat( sqlcmd, " 自宅住所番地気付カナ," );
+				// strcat( sqlcmd, " 自宅住所気付カナ," );
+				/* %04 Edit End */
 				/* %03 Add End */
 				strcat( sqlcmd, " 住所カナ変更フラグ " );
 			}
@@ -403,8 +408,10 @@ char	*argv[];
 				strcat( sqlcmd, " 連絡先住所市区町村," );
 				strcat( sqlcmd, " 連絡先住所大字通称," );
 				strcat( sqlcmd, " 連絡先住所字丁目," );
-				strcat( sqlcmd, " 連絡先住所番地," );
-				strcat( sqlcmd, " 連絡先住所気付," );
+				/* %04 1.0次５分割住所対応 Edit Start */
+				strcat( sqlcmd, " 連絡先住所番地気付," );
+				// strcat( sqlcmd, " 連絡先住所気付," );
+				/* %04 Edit End */
 				/* %03 Add End */
 				strcat( sqlcmd, " 連絡先住所変更フラグ " );
 			}
@@ -417,8 +424,10 @@ char	*argv[];
 				strcat( sqlcmd, " 連絡先住所市区町村カナ," );
 				strcat( sqlcmd, " 連絡先住所大字通称カナ," );
 				strcat( sqlcmd, " 連絡先住所字丁目カナ," );
-				strcat( sqlcmd, " 連絡先住所番地カナ," );
-				strcat( sqlcmd, " 連絡先住所気付カナ," );
+			/* %04 1.0次５分割住所対応 Edit Start */
+				strcat( sqlcmd, " 連絡先住所番地気付カナ," );
+				// strcat( sqlcmd, " 連絡先住所気付カナ," );
+			/* %04 Edit End */
 				/* %03 Add End */
 				strcat( sqlcmd, " 連絡先住所カナ変更フラグ " );
 			}
@@ -480,8 +489,9 @@ char	*argv[];
 			memset( TMKZs_adress3.arr, 0x00, sizeof(TMKZs_adress3.arr));
 			memset( TMKZs_adress4.arr, 0x00, sizeof(TMKZs_adress4.arr));
 			memset( TMKZs_adress5.arr, 0x00, sizeof(TMKZs_adress5.arr));
-			memset( TMKZs_adress6.arr, 0x00, sizeof(TMKZs_adress6.arr));
-
+		/* %04 1.0次５分割住所対応 Delete Start */
+			// memset( TMKZs_adress6.arr, 0x00, sizeof(TMKZs_adress6.arr));
+		/* %04  Delete End */
 
             G_POSITION = __LINE__;
             EXEC SQL FETCH cur_tbzok01
@@ -493,7 +503,9 @@ char	*argv[];
 						:TMKZs_adress3					:TMKZsi_adress3,		/* %03 Add */
 						:TMKZs_adress4					:TMKZsi_adress4,		/* %03 Add */
 						:TMKZs_adress5					:TMKZsi_adress5,		/* %03 Add */
-						:TMKZs_adress6					:TMKZsi_adress6,		/* %03 Add */
+					/* %04 1.0次５分割住所対応 Delete Start */
+						// :TMKZs_adress6					:TMKZsi_adress6,		/* %03 Add */
+					/* %04  Delete End */
                         :WK_zokusei_now_jyusyo_flg      :WKi_zokusei_now_jyusyo_flg;
 
             if( sqlca.sqlcode == ORA_NOF ){
@@ -537,14 +549,14 @@ char	*argv[];
 
 			/* -------------------------------------------------------------------*/
 			/* 住所	      ( 属性ID = 0005 )                                       */
-            /* ホスト：郵便番号＋都道府県＋市区町村＋大字通称＋字丁目＋番地＋気付 */
+            /* ホスト：郵便番号＋都道府県＋市区町村＋大字通称＋字丁目＋番地気付  %04 EDIT  */
 			/* -------------------------------------------------------------------*/
 			if( !strcmp( TDAC_attribute_id, ZK_ADDRESS )) {
 				strcpy ( address_buff, WK_zokusei_now_zipcd );
 			}
 			/* -------------------------------------------------------------------*/
 			/* 連絡先住所 ( 属性ID = 0014 )                                       */
-			/* ホスト：郵便番号＋都道府県＋市区町村＋大字通称＋字丁目＋番地＋気付 */
+			/* ホスト：郵便番号＋都道府県＋市区町村＋大字通称＋字丁目＋番地気付  %04 EDIT  */
 			/* -------------------------------------------------------------------*/
 			else if( !strcmp( TDAC_attribute_id, ZK_CONTACT_ADDRESS )) {
 				strcpy ( address_buff, WK_zokusei_now_zipcd );
@@ -552,7 +564,7 @@ char	*argv[];
 			/* -------------------------------------------------------------------*/
 			/* 住所カナ	        ( 属性ID = 0013 )                                 */
 			/* 連絡先住所カナ   ( 属性ID = 0015 )                                 */
-			/* ホスト：都道府県＋市区町村＋大字通称＋字丁目＋番地＋気付           */
+			/* ホスト：都道府県＋市区町村＋大字通称＋字丁目＋番地気付    %04 EDIT */
 			/* -------------------------------------------------------------------*/
 			else {
 				/* 郵便番号は不要 */
@@ -565,7 +577,9 @@ char	*argv[];
             strncat( address_buff, TMKZs_adress3.arr, TMKZs_adress3.len );
             strncat( address_buff, TMKZs_adress4.arr, TMKZs_adress4.len );
             strncat( address_buff, TMKZs_adress5.arr, TMKZs_adress5.len );
-            strncat( address_buff, TMKZs_adress6.arr, TMKZs_adress6.len );
+		/* %04 1.0次５分割住所対応 Delete Start */
+            // strncat( address_buff, TMKZs_adress6.arr, TMKZs_adress6.len );
+		/* %04 DELETE End */
 
 
             strCodeChange( chg_address_buff );
