@@ -177,8 +177,10 @@ $global:M_PROFILE_BASE       ="D_PRO"       # 顧客プロファイル
 $global:M_BHISTORY_BASE      ="D_LGD"       # 営業店コンタクト履歴ファイル
 
 $global:M_OPEINFO_BASE       ="S_IB1"       # オペレータ情報ファイル
-$global:M_CONTRACT_BASE      ="S_CZU"       # テレバン契約属性ファイル
+# $global:M_CONTRACT_BASE      ="S_CZU"       # テレバン契約属性ファイル (1.0次にて 削除)
 $global:M_CONTACT_BASE       ="S_LCU"       # コンタクト履歴ファイル
+$global:M_TB_CONTRACT_BASE   ="S_TB1"       # テレバン契約情報ファイル (1.0次 追加)
+$global:M_TB_ACCOUNT_BASE    ="S_TB2"       # テレバン契約口座情報ファイル (1.0次 追加)
 
 
 # 未使用
