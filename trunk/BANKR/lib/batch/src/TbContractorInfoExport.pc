@@ -1,0 +1,750 @@
+/*==========================================================================*/
+/* Copyright　Information Services International-Dentsu, Ltd.   　          */
+/*==========================================================================*/
+/*                                                                          */
+/* SYSTEM           : BANK・R コンタクトセンター                            */
+/*                                                                          */
+/* PROGRAM NAME     : テレバン契約者属性抽出                                */
+/*                                                                          */
+/* MODULE NAME      : TbContractorExport                                    */
+/*                                                                          */
+/* FUNCTION         : テレバン契約者属性の全件抽出処理を行う                */
+/*                                                                          */
+/*                                                                          */
+/* CALLING MODULE   : Main Module.                                          */
+/*                                                                          */
+/* CALLED MODULE    : send_err, errhandler, db_connect                      */
+/*                                                                          */
+/* ENTRY POint      : Main Module.                                          */
+/*                                                                          */
+/* INPUT            : argv[1]・・テレバン契約者属性ファイル(ﾌﾙﾊﾟｽ)          */
+/*                                                                          */
+/*                                                                          */
+/* EXIT             : 正常終了       ・・・NORMAL(0)                        */
+/*                    異常終了       ・・・ERROR (9)                        */
+/*                                                                          */
+/* Mod   yy/mm/dd   Coder           Comment                                 */
+/*-----+----------+-------------+-------------------------------------------*/
+/* %00 | 15/02/05 | 土居 康一郎 | 0.5次の契約者属性抽出(差分)をリメイク     */
+/* %01 | 15/02/06 | 土居 康一郎 | 日中連絡先のホスト変数桁数修正(15→20)    */
+/* %02 | 15/02/06 | 土居 康一郎 | 限度額のフォーマットの精度を整数のみに修正*/
+/*==========================================================================*/
+/*---------------------------------------------------------------------------*/
+/* Standard include specification                                            */
+/*---------------------------------------------------------------------------*/
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <ctype.h>
+#include <errno.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <time.h>
+
+/*---------------------------------------------------------------------------*/
+/* User defined include specification                                        */
+/*---------------------------------------------------------------------------*/
+#include "msg.h"
+#include "common.h"
+#include "batchcommon.h"
+#include "apl_common.h"
+
+EXEC SQL INCLUDE mbproc.h;
+
+/*---------------------------------------------------------------------------*/
+/* Internal macro definition                                                 */
+/*---------------------------------------------------------------------------*/
+
+typedef struct _SEND_FILE_DATA {
+    char szUserID               [10];               /* 契約者番号           */
+    char szCifNo                [10];               /* 顧客番号             */
+    char szTb_appli_branch      [ 5];               /* TB申込店             */
+    char szContac_phone_number  [20];               /* 日中連絡先電話番号   */
+    char szApplication_date     [ 8];               /* 申込日               */
+    char szContract_date        [ 8];               /* 契約日               */
+    char szCancel_date          [ 8];               /* 契約解除日           */
+    char szLimit_amount_once    [ 8];               /* 事前振込限度額1回    */
+    char szLimit_amount_day     [ 8];               /* 事前振込限度額1日    */
+    char szPin_change_date      [ 8];               /* 暗証変更日           */
+    char szPin_input_count[2];                      /* 暗証番号入力回数     */
+    char szPin_wrong_date       [14];               /* 暗証番号誤入力日時   */
+    char szPin_number_lock      [ 1];               /* 暗証番号ロック       */
+    char szPin_lock_date [14];                      /* 暗証番号ロック日時   */
+    char szAccident             [ 1];               /* 事故届               */
+    char szAccident_id          [ 4];               /* 事故設定ID           */
+    char szAccident_date        [14];               /* 事故設定日時         */
+    char szAccident_canceldate  [14];               /* 事故設定解除日時     */
+    char szAccident_set         [ 8];               /* 事故設定者           */
+    char szRecognition_date     [14];               /* 承認日               */
+    char szRecognition          [ 8];               /* 承認者               */
+    char szRegistration_date    [14];               /* 登録日               */
+    char szRegistrant           [ 8];               /* 登録者               */
+    char szLast_update_date     [14];               /* 最終更新日           */
+    char szLast_update          [ 8];               /* 最終更新者           */
+    char szKaigyou              [ 1];               /* 改行                 */
+} SEND_FILE_DATA;
+
+
+typedef struct _COUNT {
+    int  iRecNum;                                    /* 処理件数             */
+    int  iOkNum ;                                    /* 正常終了             */
+    int  iInsNum;                                    /* 正常終了（新規登録） */
+    int  iUpdNum;                                    /* 正常終了（更新）     */
+    int  iDelNum;                                    /* 正常終了（削除）     */
+    int  iNgNum ;                                    /* ERROR終了            */
+} COUNT;
+/*---------------------------------------------------------------------------*/
+/* Global variable specification                                             */
+/*---------------------------------------------------------------------------*/
+/* 設定ファイル項目（ホスト変数以外）*/
+char g_szSendFile       [AP_CONFIG_LINE ];         /* 送信ファイル             */
+
+char g_SendRec          [1024];                  /* 送信ファイル１レコード   */
+
+FILE *g_pfSendFile;
+
+char g_szDtlMsg           [AP_C_NOTE_LEN_H];         /* 事象詳細文字列       */
+
+char    process_name[43];
+char    g_work[1024];
+
+int file_open_flag  = 0;                            /* ファイルオープンフラグ */
+int cusor_open_flag = 0;                            /* カーソルオープンフラグ */
+
+
+/*---------------------------------------------------------------------------*/
+/* Host Variable                                                             */
+/*---------------------------------------------------------------------------*/
+EXEC SQL INCLUDE SQLCA;
+EXEC SQL BEGIN DECLARE SECTION;
+    /* ＤＢ接続情報 */
+    char sqlcmd[2048];
+
+/* 契約者（KEIYAKU_T） */
+    char     h_UserID[11];                          /* 契約者番号             */
+    short   hi_UserID;
+    char     h_CIFNO[11];                           /* 顧客番号             */
+    short   hi_CIFNO;
+    char     h_Tb_appli_branch[5+1];                /* TB申込店 */
+    short   hi_Tb_appli_branch;
+    char     h_Contac_phone_number[20+1];           /* 日中連絡先電話番号 %01 EDIT */
+    short   hi_Contac_phone_number;
+    char     h_Application_date[8+1];               /* 申込日 */
+    short   hi_Application_date;
+    char     h_Contract_date[8+1];                  /* 契約日 */
+    short   hi_Contract_date;
+    char     h_Cancel_date[8+1];                    /* 契約解除日 */
+    short   hi_Cancel_date;
+    double   h_Limit_amount_once;                   /* 事前振込限度額1回 */
+    short   hi_Limit_amount_once;
+    double   h_Limit_amount_day;                    /* 事前振込限度額1日 */
+    short   hi_Limit_amount_day;
+    char     h_Pin_change_date[8+1];                /* 暗証変更日 */
+    short   hi_Pin_change_date;
+    int      h_Pin_input_count;                     /* 暗証番号入力回数 */
+    short   hi_Pin_input_count;
+    char     h_Pin_wrong_date[14+1];                /* 暗証番号誤入力日時 */
+    short   hi_Pin_wrong_date;
+    char     h_Pin_number_lock[1+1];                /* 暗証番号ロック */
+    short   hi_Pin_number_lock;
+    char     h_Pin_lock_date[14+1];                 /* 暗証番号ロック日時 */
+    short   hi_Pin_lock_date;
+    char     h_Accident[1+1];                       /* 事故届 */
+    short   hi_Accident;
+    char     h_Accident_id[4+1];                    /* 事故設定ID */
+    short   hi_Accident_id;
+    char     h_Accident_date[14+1];                 /* 事故設定日時 */
+    short   hi_Accident_date;
+    char     h_Accident_canceldate[14+1];           /* 事故設定解除日時 */
+    short   hi_Accident_canceldate;
+    char     h_Accident_set[8+1];                   /* 事故設定者 */
+    short   hi_Accident_set;
+    char     h_Recognition_date[14+1];              /* 承認日 */
+    short   hi_Recognition_date;
+    char     h_Recognition[8+1];                    /* 承認者 */
+    short   hi_Recognition;
+    char     h_Registration_date[32+1];             /* 登録日 */
+    short   hi_Registration_date;
+    char     h_Registrant[8+1];                     /* 登録者 */
+    short   hi_Registrant;
+    char     h_Last_update_date[14+1];              /* 最終更新日 */
+    short   hi_Last_update_date;
+    char     h_Last_update[8+1];                    /* 最終更新者 */
+    short   hi_Last_update;
+
+
+    char  h_EigyoID[6];                              /* 営業店ID             */
+    short hi_EigyoID;
+    char  h_KaijoDate[11];                           /* 解除日               */
+    short hi_KaijoDate;
+
+
+    long  h_COUNT;
+
+EXEC SQL END DECLARE SECTION;
+
+/*---------------------------------------------------------------------------*/
+/* External function prototype                                               */
+/*---------------------------------------------------------------------------*/
+
+/*---------------------------------------------------------------------------*/
+/* Internal function prototype                                               */
+/*---------------------------------------------------------------------------*/
+extern int send_err();
+extern void errhandler();
+extern int db_connect();
+void rtrim();
+
+static void initialize( int ac, char *av[] );
+static int  cursorOpen( char *g_szDtlMsg );
+static int  readTables( char *g_szDtlMsg );
+static int  putSendData( char *g_szDtlMsg );
+static void finalize( int rc );
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   int main( int argc, char *argv[] )                                      */
+/*                                                                           */
+/* Made by:                                                                  */
+/* Description:                                                              */
+/*      メイン処理                                                           */
+/*                                                                           */
+/* Arguments:                                                                */
+/* Type     Name              I/O    Content                                 */
+/* -------- ----------------- --- ------------------------------------------ */
+/*    int    argc              I  引数の数                                   */
+/*    char  *argv[]   argv[1]  I  テレバン契約者属性ファイル(ﾌﾙﾊﾟｽ)          */
+/*                                                                           */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+int main( int argc, char *argv[] )
+{
+    int  rc;
+    COUNT    dCount;
+
+    /*-----------------------------*/
+    /* Print process start message */
+    /*-----------------------------*/
+
+    strcpy( G_STATION, "TbContractorExport" );
+    
+    memset(process_name,0x00,sizeof(process_name));
+    strcpy(process_name,"テレバン契約者属性抽出");
+
+    send_err( m$start_process, NORMAL, process_name, "", "", G_STATION );
+
+    memset ( &dCount, 0x0, sizeof(dCount));
+
+    /*-------------------------------------------------------*/
+    /* Setup error handler routine                           */
+    /*-------------------------------------------------------*/
+    EXEC SQL WHENEVER SQLERROR DO errhandler();
+
+    G_POSITION = __LINE__;
+    rc = db_connect() ;
+    if ( rc != NORMAL ) {
+        send_err( m$db_connect, rc, "", "", "", G_STATION );
+        rc = ERROR;
+        goto ENDPROC ;
+    }
+
+    /* ---------- */
+    /* 初期化処理 */
+    /* ---------- */
+    initialize( argc, argv );
+
+
+    while( 1 ) {
+   
+        /* TFB_テレバン契約属性の読込 */
+        if(( rc = readTables( g_szDtlMsg )) != NORMAL ) {
+            break;
+        }
+        if( sqlca.sqlcode == ORA_NOF ) {
+            break;
+        }
+
+        /* テレバン契約者属性ファイルへの書き込み */
+        if(( rc = putSendData( g_szDtlMsg )) != NORMAL ) {
+            break;
+        }
+
+        dCount.iRecNum++;
+
+    } /* while loop end */
+
+    if ( rc == NORMAL ){
+        dCount.iOkNum = dCount.iRecNum;
+    }
+     
+    if( rc == NORMAL ) {
+        if ( dCount.iRecNum == 0 ){
+            sprintf ( g_szDtlMsg, "テレバン契約者属性ファイル(%s)は０件ファイルです。", g_szSendFile );
+        }
+        else {
+            sprintf ( g_szDtlMsg, "テレバン契約者属性ファイル(%s) %d 件のデータを抽出しました。", g_szSendFile ,dCount.iRecNum );
+        }
+        send_err (m$message1, NORMAL, g_szDtlMsg, NULL, NULL, G_STATION);
+    }
+    
+
+ENDPROC:    
+    if ( rc == NORMAL ) {
+        send_err( m$stop_process, NORMAL, process_name, "", "", G_STATION );
+    } else {
+        send_err( m$abend_process, ERROR, process_name, "", "", G_STATION );
+    }
+
+     finalize( rc );
+
+}
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   void initialize( int ac, char *av[] )                                   */
+/*                                                                           */
+/* Made by:                                                                  */
+/* Description:                                                              */
+/*      初期化処理                                                           */
+/*                                                                           */
+/* Arguments:                                                                */
+/* Type     Name              I/O    Content                                 */
+/* -------- ----------------- --- ------------------------------------------ */
+/*    int    argc              I  引数の数                                   */
+/*    char  *argv[]   argv[1]  I  処理モード(1:通常 2:障害時)                */
+/*                    argv[2]  I  テレバン契約者属性ファイル(ﾌﾙﾊﾟｽ)          */
+/*                    argv[3]  I  抽出開始日(モード2の時のみ指定)            */
+/*                    argv[4]  I  抽出終了日(モード2の時のみ指定)            */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*                                                                           */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static void initialize( int ac, char *av[] )
+{
+    time_t t = time( NULL );
+
+    int exit_code=NORMAL;
+
+    /* 引数処理 */
+    if ( ac != 2 ) {
+        sprintf (g_szDtlMsg,"抽出ファイル名を指定して下さい。");
+        send_err (m$invalid_parameter, ERROR, g_szDtlMsg, NULL, NULL, G_STATION);
+        exit_code = ERROR;
+        goto initialize_end;
+    }
+
+    strcpy ( g_szSendFile, av[1] );
+
+
+    /* テレバン契約者属性ファイルのオープン */
+    if(( g_pfSendFile = fopen( g_szSendFile, "w" )) == NULL ) {
+        sprintf( g_szDtlMsg, "テレバン契約者属性ファイル%sのオープンに失敗しました。", g_szSendFile );
+        send_err( m$file_open, errno, g_szDtlMsg, NULL, NULL, G_STATION );
+
+        exit_code = ERROR;
+        goto initialize_end;
+
+    }
+    file_open_flag = 1;
+
+
+    /* 契約者テーブルのカーソルオープン */
+    if( cursorOpen( g_szDtlMsg ) != NORMAL ) {
+        exit_code = ERROR;
+        goto initialize_end;
+        exit( ERROR );
+    }
+
+    cusor_open_flag = 1;
+
+initialize_end:
+
+    if ( exit_code != NORMAL ) {
+        send_err( m$abend_process, ERROR, process_name, "", "", G_STATION );
+        exit ( exit_code );    
+    }
+
+}
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   cursorOpen( char *g_szDtlMsg )                                          */
+/*                                                                           */
+/* Description:                                                              */
+/*   TFB_テレバン契約属性 カーソルオープン                                   */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* g_szDtlMsg      char*         I   メッセージ格納領域                      */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   None                                                                    */
+/*                                                                           */
+/* Return Code:                                                              */
+/*   NORMAL       : 正常終了                                                 */
+/*   ERROR        : カーソルオープンエラー                                   */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/*****************************************************************************/
+static int cursorOpen( char *g_szDtlMsg )
+{
+
+
+    /* カーソル定義 */
+    G_POSITION = __LINE__;
+    EXEC SQL DECLARE CUR_01 CURSOR FOR
+        SELECT
+            契約者番号
+            ,CIFNO
+            ,TB申込店
+            ,日中連絡先電話番号
+            ,申込日
+            ,契約日
+            ,契約解除日
+            ,事前振込限度額1回
+            ,事前振込限度額1日
+            ,暗証変更日
+            ,暗証番号入力回数
+            ,TO_CHAR(暗証番号誤入力日時,'YYYYMMDDHH24MISS')
+            ,暗証ロック
+            ,TO_CHAR(暗証ロック日時,'YYYYMMDDHH24MISS')
+            ,事故届
+            ,事故設定ID
+            ,TO_CHAR(事故設定日時,'YYYYMMDDHH24MISS')
+            ,TO_CHAR(事故解除日時,'YYYYMMDDHH24MISS')
+            ,事故設定者
+            ,TO_CHAR(承認日,'YYYYMMDDHH24MISS')
+            ,承認者
+            ,TO_CHAR(登録日,'YYYYMMDDHH24MISS')
+            ,登録者
+            ,TO_CHAR(最終更新日,'YYYYMMDDHH24MISS')
+            ,最終更新者
+        FROM
+            TFB_テレバン契約属性                       
+        ORDER BY
+            契約者番号;
+
+    /* カーソル・オープン */
+    EXEC SQL OPEN CUR_01;
+    if( sqlca.sqlcode != 0 ) {
+        sprintf( g_szDtlMsg,
+                "カーソル(CUR_01)オープン・エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+        send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+
+        return ERROR;
+    }
+
+    return NORMAL;
+
+}
+
+
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   readTables( char *g_szDtlMsg )                                          */
+/*                                                                           */
+/* Description:                                                              */
+/*   TFB_テレバン契約属性 テーブルの読込                                     */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* g_szDtlMsg      char*         I   メッセージ格納領域                      */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   None                                                                    */
+/*                                                                           */
+/* Return Code:                                                              */
+/*   NORMAL       : 正常終了                                                 */
+/*   ERROR        : テーブルセレクト時エラー                                 */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/*****************************************************************************/
+static int readTables( char *g_szDtlMsg )
+{
+           
+    /* ホスト変数の初期化 */
+    memset( h_UserID, '\0', sizeof( h_UserID ));    /* 契約者番号             */
+    hi_UserID= ORA_NULL;
+    memset( h_CIFNO,    '\0', sizeof( h_CIFNO ));   /* 顧客番号               */
+    hi_CIFNO= ORA_NULL;
+    memset( h_Tb_appli_branch,      '\0', sizeof( h_Tb_appli_branch ));         /* TB申込店 */
+    hi_Tb_appli_branch= ORA_NULL;
+    memset( h_Contac_phone_number,  '\0', sizeof( h_Contac_phone_number ));     /* 日中連絡先電話番号 */
+    hi_Contac_phone_number= ORA_NULL;
+    memset( h_Application_date,     '\0', sizeof( h_Application_date ));        /* 申込日 */
+    hi_Application_date= ORA_NULL;
+    memset( h_Contract_date,        '\0', sizeof( h_Contract_date ));           /* 契約日 */
+    hi_Contract_date= ORA_NULL;
+    memset( h_Cancel_date,          '\0', sizeof( h_Cancel_date ));             /* 契約解除日 */
+    hi_Cancel_date= ORA_NULL;
+    h_Limit_amount_once=0;                                                      /* 事前振込限度額1回 */
+    hi_Limit_amount_once= ORA_NULL;
+    h_Limit_amount_day=0;                                                       /* 事前振込限度額1日 */
+    hi_Limit_amount_day= ORA_NULL;
+    memset( h_Pin_change_date,      '\0', sizeof( h_Pin_change_date ));         /* 暗証変更日 */
+    hi_Pin_change_date= ORA_NULL;
+    h_Pin_input_count=0;                                                        /* 暗証番号入力回数 */
+    hi_Pin_input_count= ORA_NULL;
+    memset( h_Pin_wrong_date,       '\0', sizeof( h_Pin_wrong_date ));          /* 暗証番号誤入力日時 */
+    hi_Pin_wrong_date= ORA_NULL;
+    memset( h_Pin_number_lock,      '\0', sizeof( h_Pin_number_lock ));         /* 暗証番号ロック */
+    hi_Pin_number_lock= ORA_NULL;
+    memset( h_Pin_lock_date, '\0', sizeof( h_Pin_lock_date ));                  /* 暗証番号ロック日時 */
+    hi_Pin_lock_date= ORA_NULL;
+    memset( h_Accident,             '\0', sizeof( h_Accident ));                /* 事故届 */
+    hi_Accident= ORA_NULL;
+    memset( h_Accident_id,          '\0', sizeof( h_Accident_id ));             /* 事故設定ID */
+    hi_Accident_id= ORA_NULL;
+    memset( h_Accident_date,        '\0', sizeof( h_Accident_date ));           /* 事故設定日時 */
+    hi_Accident_date= ORA_NULL;
+    memset( h_Accident_canceldate,  '\0', sizeof( h_Accident_canceldate ));     /* 事故設定解除日時 */
+    hi_Accident_canceldate= ORA_NULL;
+    memset( h_Accident_set,         '\0', sizeof( h_Accident_set ));            /* 事故設定者 */
+    hi_Accident_set= ORA_NULL;
+    memset( h_Recognition_date,     '\0', sizeof( h_Recognition_date ));        /* 承認日 */
+    hi_Recognition_date= ORA_NULL;
+    memset( h_Recognition,          '\0', sizeof( h_Recognition ));             /* 承認者 */
+    hi_Recognition= ORA_NULL;
+    memset( h_Registration_date,    '\0', sizeof( h_Registration_date ));       /* 登録日 */
+    hi_Registration_date;
+    memset( h_Registrant,           '\0', sizeof( h_Registrant ));              /* 登録者 */
+    hi_Registrant= ORA_NULL;
+    memset( h_Last_update_date,     '\0', sizeof( h_Last_update_date ));        /* 最終更新日 */
+    hi_Last_update_date= ORA_NULL;
+    memset( h_Last_update,          '\0', sizeof( h_Last_update ));             /* 最終更新者 */
+    hi_Last_update= ORA_NULL;
+
+    G_POSITION = __LINE__;
+    EXEC SQL FETCH CUR_01
+        INTO
+            :h_UserID :hi_UserID,                               /* 契約者番号             */
+            :h_CIFNO :hi_CIFNO,                                 /* 顧客番号             */
+            :h_Tb_appli_branch :hi_Tb_appli_branch,             /* TB申込店 */
+            :h_Contac_phone_number :hi_Contac_phone_number,     /* 日中連絡先電話番号 */
+            :h_Application_date :hi_Application_date,           /* 申込日 */
+            :h_Contract_date :hi_Contract_date,                 /* 契約日 */
+            :h_Cancel_date :hi_Cancel_date,                     /* 契約解除日 */
+            :h_Limit_amount_once :hi_Limit_amount_once,         /* 事前振込限度額1回 */
+            :h_Limit_amount_day :hi_Limit_amount_day,           /* 事前振込限度額1日 */
+            :h_Pin_change_date :hi_Pin_change_date,             /* 暗証変更日 */
+            :h_Pin_input_count :hi_Pin_input_count,  /* 暗証番号入力回数 */
+            :h_Pin_wrong_date :hi_Pin_wrong_date,               /* 暗証番号誤入力日時 */
+            :h_Pin_number_lock :hi_Pin_number_lock,             /* 暗証番号ロック */
+            :h_Pin_lock_date :hi_Pin_lock_date,   /* 暗証番号ロック日時 */
+            :h_Accident :hi_Accident,                           /* 事故届 */
+            :h_Accident_id :hi_Accident_id,                     /* 事故設定ID */
+            :h_Accident_date :hi_Accident_date,                 /* 事故設定日時 */
+            :h_Accident_canceldate :hi_Accident_canceldate,     /* 事故設定解除日時 */
+            :h_Accident_set :hi_Accident_set,                   /* 事故設定者 */
+            :h_Recognition_date :hi_Recognition_date,           /* 承認日 */
+            :h_Recognition :hi_Recognition,                     /* 承認者 */
+            :h_Registration_date :hi_Registration_date,         /* 登録日 */
+            :h_Registrant :hi_Registrant,                       /* 登録者 */
+            :h_Last_update_date :hi_Last_update_date,           /* 最終更新日 */
+            :h_Last_update :hi_Last_update;                     /* 最終更新者 */
+
+
+
+    /* エラーチェック */
+    if( sqlca.sqlcode == ORA_NOF ) {
+        return NORMAL;
+    } 
+    else if( sqlca.sqlcode != 0 ) {
+        send_err ( m$emb_error, sqlca.sqlcode, "TFB_テレバン契約属性テーブルの取得でエラーが発生しました", NULL, NULL, G_STATION);
+        
+        return ERROR;
+    }
+
+    return NORMAL;
+         
+}
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   putSendData( char *g_szDtlMsg )                                         */
+/*                                                                           */
+/* Description:                                                              */
+/*   オペレータ情報提携ファイルへの書き込み                                  */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* g_szDtlMsg      char*         I   メッセージ格納領域                      */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   None                                                                    */
+/*                                                                           */
+/* Return Code:                                                              */
+/*   NORMAL    : 正常終了                                                    */
+/*   ERROR     : データ異常                                                  */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/*****************************************************************************/
+static int putSendData( char *g_szDtlMsg )
+{
+    SEND_FILE_DATA dData;
+    char buff[16];
+
+    /* バッファ初期化 */
+    memset( &dData, ' ', sizeof( dData ));
+    memset( buff, 0x0, sizeof( buff ));
+
+    memcpy( dData.szUserID,                 h_UserID,               strlen( h_UserID ));                /* 契約者番号             */
+    memcpy( dData.szCifNo,                  h_CIFNO,                strlen( h_CIFNO ));                 /* 顧客番号               */
+    memcpy( dData.szTb_appli_branch,        h_Tb_appli_branch,      strlen( h_Tb_appli_branch ));       /* TB申込店 */
+    memcpy( dData.szContac_phone_number,    h_Contac_phone_number,  strlen( h_Contac_phone_number ));   /* 日中連絡先電話番号 */
+    memcpy( dData.szApplication_date,       h_Application_date,     strlen( h_Application_date ));      /* 申込日 */
+    memcpy( dData.szContract_date,          h_Contract_date,        strlen( h_Contract_date ));         /* 契約日 */
+    memcpy( dData.szCancel_date,            h_Cancel_date,          strlen( h_Cancel_date ));           /* 契約解除日 */
+
+    if (hi_Limit_amount_once != ORA_NULL) {
+        /* 外部IFは8桁なので、それを超える額は最大桁に変換 仕様では限度額は12000000固定 */
+		if ( h_Limit_amount_once > 99999999 ) {
+            h_Limit_amount_once = 99999999;
+        }
+// %02 Edit START
+//        sprintf(buff,"%f",h_Limit_amount_once);
+        sprintf(buff,"%.0f",h_Limit_amount_once);
+// %02 Edit END
+        memcpy( dData.szLimit_amount_once,  buff,                   strlen( buff ));                    /* 事前振込限度額1回 */
+    }
+
+    if (hi_Limit_amount_day != ORA_NULL) {
+        /* 外部IFは8桁なので、それを超える額は最大桁に変換 仕様では限度額は12000000固定 */
+        if ( hi_Limit_amount_day > 99999999 ) {
+            hi_Limit_amount_day = 99999999;
+        }
+// %02 Edit START
+//        sprintf(buff,"%f",h_Limit_amount_day);
+        sprintf(buff,"%.0f",h_Limit_amount_day);
+// %02 Edit END
+		memcpy( dData.szLimit_amount_day,   buff,                   strlen( buff ));                   /* 事前振込限度額1回 */
+    }
+
+    memcpy( dData.szPin_change_date,        h_Pin_change_date,      strlen( h_Pin_change_date ));       /* 暗証変更日 */
+
+    if (hi_Pin_input_count != ORA_NULL) {
+        sprintf(buff,"%d",h_Pin_input_count);
+        memcpy( dData.szPin_input_count,    buff,                   strlen( buff ));                    /* 暗証番号入力回数 */
+    }
+
+    memcpy( dData.szPin_wrong_date,         h_Pin_wrong_date,       strlen( h_Pin_wrong_date ));        /* 暗証番号誤入力日時 */
+    memcpy( dData.szPin_number_lock,        h_Pin_number_lock,      strlen( h_Pin_number_lock ));       /* 暗証番号ロック */
+    memcpy( dData.szPin_lock_date,          h_Pin_lock_date,        strlen( h_Pin_lock_date ));         /* 暗証番号ロック日時 */
+    memcpy( dData.szAccident,               h_Accident,             strlen( h_Accident ));              /* 事故届 */
+    memcpy( dData.szAccident_id,            h_Accident_id,          strlen( h_Accident_id ));           /* 事故設定ID */
+    memcpy( dData.szAccident_date,          h_Accident_date,        strlen( h_Accident_date ));         /* 事故設定日時 */
+    memcpy( dData.szAccident_canceldate,    h_Accident_canceldate,  strlen( h_Accident_canceldate ));   /* 事故設定解除日時 */
+    memcpy( dData.szAccident_set,           h_Accident_set,         strlen( h_Accident_set ));          /* 事故設定者 */
+    memcpy( dData.szRecognition_date,       h_Recognition_date,     strlen( h_Recognition_date ));      /* 承認日 */
+    memcpy( dData.szRecognition ,           h_Recognition,          strlen( h_Recognition ));           /* 承認者 */
+    memcpy( dData.szRegistration_date,      h_Registration_date,    strlen( h_Registration_date ));     /* 登録日 */
+    memcpy( dData.szRegistrant,             h_Registrant,           strlen( h_Registrant ));            /* 登録者 */
+    memcpy( dData.szLast_update_date,       h_Last_update_date,     strlen( h_Last_update_date ));      /* 最終更新日 */
+    memcpy( dData.szLast_update,            h_Last_update,          strlen( h_Last_update ));           /* 最終更新者 */
+    /* 改行 */
+    memset (dData.szKaigyou,0x0a, sizeof( dData.szKaigyou ));
+
+    /* オペレータ情報連携ファイルへの書き込み */
+    if ( fwrite( &dData, sizeof( dData ), 1, g_pfSendFile ) != 1 ) {
+        send_err ( m$file_write, errno, g_szSendFile, &dData , NULL, G_STATION);
+        return ERROR;
+    }
+
+    return NORMAL;
+
+
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*     finalize( int rc )                                                    */
+/* Made by:                                                                  */
+/* Description:終了処理                                                      */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* rc              int           i   リターンコード                          */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static void finalize( int rc )
+{
+
+    /* ファイルのクローズ */
+    if ( file_open_flag == 1 ) {
+        fclose( g_pfSendFile );
+    }
+    
+    /* カーソルクローズ */
+    if ( cusor_open_flag == 1 ) {
+        EXEC SQL CLOSE CUR_01;
+    }
+
+
+    exit( rc );
+}
