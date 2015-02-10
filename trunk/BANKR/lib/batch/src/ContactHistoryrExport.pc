@@ -64,6 +64,7 @@
 /* %06 | 14/09/03 | ISID        | 顧客管理番号の採番方法修正                */
 /* %07 | 14/09/05 | ISID        | 顧客管理番号の採番方法修正2               */
 /*                              |   画面での外部データ取り込みの対応        */
+/* %08 | 15/02/09 | 土居 康一郎 | 1.0次 CIFNO10桁対応                       */
 /*==========================================================================*/
 /*---------------------------------------------------------------------------*/
 /* Standard include specification                                            */
@@ -759,7 +760,10 @@ static int makeServiceLog()
                AND CNT.登録日 < TO_DATE(:h_FROM_TS,'YYYYMMDD HH24MISS')
                AND SRV.登録日 BETWEEN TO_DATE(:h_FROM_TS,'YYYYMMDD HH24MISS') AND TO_DATE(:h_TO_TS,'YYYYMMDD HH24MISS')
                AND SRV.移行履歴フラグ is null
-               AND LENGTH(RTRIM(SRV.CIFNO)) = 7
+/* %08 EDIT START */
+//             AND LENGTH(RTRIM(SRV.CIFNO)) = 7 */
+               AND LENGTH(RTRIM(SRV.CIFNO)) = 10
+/* %08 EDIT END */
                AND SRV.種類 != '04'
                AND SRV.種類 != '06'
                AND SRV.種類 != '07'
@@ -927,7 +931,10 @@ static int makeGeneralLog()
 			   AND CNT.コール日時 > add_months(sysdate ,-24)
 			   AND CNT.登録日 < TO_DATE(:h_FROM_TS,'YYYYMMDD HH24MISS')
                AND SRV.移行履歴フラグ is null
-               AND LENGTH(RTRIM(SRV.CIFNO)) = 7
+/* %08 EDIT START */
+//             AND LENGTH(RTRIM(SRV.CIFNO)) = 7 */
+               AND LENGTH(RTRIM(SRV.CIFNO)) = 10
+/* %08 EDIT END */
                AND SRV.種類 = '07'
 			   AND GNL.登録日 BETWEEN TO_DATE(:h_FROM_TS,'YYYYMMDD HH24MISS') AND TO_DATE(:h_TO_TS,'YYYYMMDD HH24MISS')
           ORDER BY CNT.登録日
@@ -1088,7 +1095,10 @@ static int makeSalesLog()
 			   AND CNT.コール日時 > add_months(sysdate ,-24)
                AND CNT.登録日 < TO_DATE(:h_FROM_TS,'YYYYMMDD HH24MISS')
                AND SRV.移行履歴フラグ is null
-               AND LENGTH(RTRIM(SRV.CIFNO)) = 7
+/* %08 EDIT START */
+//             AND LENGTH(RTRIM(SRV.CIFNO)) = 7 */
+               AND LENGTH(RTRIM(SRV.CIFNO)) = 10
+/* %08 EDIT END */
                AND SRV.種類 = '04'
 			   AND SAL.登録日 BETWEEN TO_DATE(:h_FROM_TS,'YYYYMMDD HH24MISS') AND TO_DATE(:h_TO_TS,'YYYYMMDD HH24MISS')
           ORDER BY CNT.登録日
@@ -1248,7 +1258,10 @@ static int makeClaimLog()
 			   AND CNT.コール日時 > add_months(sysdate ,-24)
                AND CNT.登録日 < TO_DATE(:h_FROM_TS,'YYYYMMDD HH24MISS')
                AND SRV.移行履歴フラグ is null
-               AND LENGTH(RTRIM(SRV.CIFNO)) = 7
+/* %08 EDIT START */
+//             AND LENGTH(RTRIM(SRV.CIFNO)) = 7 */
+               AND LENGTH(RTRIM(SRV.CIFNO)) = 10
+/* %08 EDIT END */
                AND SRV.種類 = '06'
 			   AND CLM.登録日 BETWEEN TO_DATE(:h_FROM_TS,'YYYYMMDD HH24MISS') AND TO_DATE(:h_TO_TS,'YYYYMMDD HH24MISS')
           ORDER BY CNT.登録日
@@ -1407,7 +1420,10 @@ static int makeNewHistory()
 			   AND CNT.コール日時 > add_months(sysdate ,-24)
                AND SRV.移行履歴フラグ is null
                AND SRV.種類 != '10'
-               AND LENGTH(RTRIM(SRV.CIFNO)) = 7
+/* %08 EDIT START */
+//             AND LENGTH(RTRIM(SRV.CIFNO)) = 7 */
+               AND LENGTH(RTRIM(SRV.CIFNO)) = 10
+/* %08 EDIT END */
 			   AND CNT.登録日 BETWEEN TO_DATE(:h_FROM_TS,'YYYYMMDD HH24MISS') AND TO_DATE(:h_TO_TS,'YYYYMMDD HH24MISS')
                AND SRV.種類 != '02'
                AND SRV.種類 != '03'
