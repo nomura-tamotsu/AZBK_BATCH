@@ -28,6 +28,7 @@
 /* %00 | 15/02/05 | 土居 康一郎 | 0.5次の契約者属性抽出(差分)をリメイク     */
 /* %01 | 15/02/06 | 土居 康一郎 | 日中連絡先のホスト変数桁数修正(15→20)    */
 /* %02 | 15/02/06 | 土居 康一郎 | 限度額のフォーマットの精度を整数のみに修正*/
+/* %03 | 15/02/12 | 土居 康一郎 | ファイル書込エラー時のログ出力修正        */
 /*==========================================================================*/
 /*---------------------------------------------------------------------------*/
 /* Standard include specification                                            */
@@ -635,6 +636,7 @@ static int putSendData( char *g_szDtlMsg )
 {
     SEND_FILE_DATA dData;
     char buff[16];
+	char msgbuff[256];   /* %03 Add ログ出力用バッファ */
 
     /* バッファ初期化 */
     memset( &dData, ' ', sizeof( dData ));
@@ -698,7 +700,14 @@ static int putSendData( char *g_szDtlMsg )
 
     /* オペレータ情報連携ファイルへの書き込み */
     if ( fwrite( &dData, sizeof( dData ), 1, g_pfSendFile ) != 1 ) {
-        send_err ( m$file_write, errno, g_szSendFile, &dData , NULL, G_STATION);
+/* %03 Edit Start */
+//        send_err ( m$file_write, errno, g_szSendFile, &dData , NULL, G_STATION);
+
+        memset( msgbuff, 0x0, sizeof( msgbuff ));
+		memcpy( msgbuff, &dData, sizeof( dData ) -1);
+
+        send_err ( m$file_write, errno, g_szSendFile, msgbuff , NULL, G_STATION);
+/* %03 Edit End */
         return ERROR;
     }
 
