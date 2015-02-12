@@ -609,7 +609,7 @@ static int readTables( char *g_szDtlMsg )
 /*   putSendData( char *g_szDtlMsg )                                         */
 /*                                                                           */
 /* Description:                                                              */
-/*   オペレータ情報提携ファイルへの書き込み                                  */
+/*   テレバン契約者属性ファイルへの書き込み                                  */
 /*                                                                           */
 /* Arguments:                                                                */
 /*   Name          Type/Length  I/O    Content                               */
@@ -698,7 +698,7 @@ static int putSendData( char *g_szDtlMsg )
     /* 改行 */
     memset (dData.szKaigyou,0x0a, sizeof( dData.szKaigyou ));
 
-    /* オペレータ情報連携ファイルへの書き込み */
+    /* テレバン契約者属性ファイルへの書き込み */
     if ( fwrite( &dData, sizeof( dData ), 1, g_pfSendFile ) != 1 ) {
 /* %03 Edit Start */
 //        send_err ( m$file_write, errno, g_szSendFile, &dData , NULL, G_STATION);

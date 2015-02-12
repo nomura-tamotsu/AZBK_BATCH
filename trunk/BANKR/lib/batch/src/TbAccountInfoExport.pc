@@ -345,7 +345,7 @@ initialize_end:
 /*   cursorOpen( char *g_szDtlMsg )                                          */
 /*                                                                           */
 /* Description:                                                              */
-/*   TFB_テレバン契約属性 カーソルオープン                                   */
+/*   TFB_テレバン契約口座 カーソルオープン                                   */
 /*                                                                           */
 /* Arguments:                                                                */
 /*   Name          Type/Length  I/O    Content                               */
@@ -425,7 +425,7 @@ static int cursorOpen( char *g_szDtlMsg )
 /*   readTables( char *g_szDtlMsg )                                          */
 /*                                                                           */
 /* Description:                                                              */
-/*   TFB_テレバン契約属性 テーブルの読込                                     */
+/*   TFB_テレバン契約口座 テーブルの読込                                     */
 /*                                                                           */
 /* Arguments:                                                                */
 /*   Name          Type/Length  I/O    Content                               */
@@ -505,7 +505,7 @@ static int readTables( char *g_szDtlMsg )
         return NORMAL;
     }
     else if( sqlca.sqlcode != 0 ) {
-        send_err ( m$emb_error, sqlca.sqlcode, "TFB_テレバン契約属性テーブルの取得でエラーが発生しました", NULL, NULL, G_STATION);
+        send_err ( m$emb_error, sqlca.sqlcode, "TFB_テレバン契約口座テーブルの取得でエラーが発生しました", NULL, NULL, G_STATION);
 
         return ERROR;
     }
@@ -567,16 +567,16 @@ static int putSendData( char *g_szDtlMsg )
     /* 改行 */
     memset (dData.szKaigyou,0x0a, sizeof( dData.szKaigyou ));
 
-    /* オペレータ情報連携ファイルへの書き込み */
+    /* テレバン契約口座情報ファイルへの書き込み */
     if ( fwrite( &dData, sizeof( dData ), 1, g_pfSendFile ) != 1 ) {
-/* %03 Edit Start */
+/* %01 Edit Start */
 //        send_err ( m$file_write, errno, g_szSendFile, &dData , NULL, G_STATION);
 
         memset( msgbuff, 0x0, sizeof( msgbuff ));
         memcpy( msgbuff, &dData, sizeof( dData ) -1);
 
         send_err ( m$file_write, errno, g_szSendFile, msgbuff , NULL, G_STATION);
-/* %03 Edit End */
+/* %01 Edit End */
 
         return ERROR;
     }
