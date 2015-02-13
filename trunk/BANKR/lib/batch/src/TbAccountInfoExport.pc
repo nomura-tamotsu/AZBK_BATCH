@@ -27,6 +27,7 @@
 /*-----+----------+-------------+-------------------------------------------*/
 /* %00 | 15/02/05 | 土居 康一郎 | First Edition.                            */
 /* %01 | 15/02/12 | 土居 康一郎 | ファイル書込エラー時のログ出力修正        */
+/* %02 | 15/02/12 | 土居 康一郎 | ログ出力文言の誤り修正                    */
 /*==========================================================================*/
 /*---------------------------------------------------------------------------*/
 /* Standard include specification                                            */
@@ -222,7 +223,7 @@ int main( int argc, char *argv[] )
 
     while( 1 ) {
 
-        /* TFB_テレバン契約属性の読込 */
+        /* TFB_テレバン契約口座の読込 */
         if(( rc = readTables( g_szDtlMsg )) != NORMAL ) {
             break;
         }
@@ -505,8 +506,9 @@ static int readTables( char *g_szDtlMsg )
         return NORMAL;
     }
     else if( sqlca.sqlcode != 0 ) {
+/* %02 Edit START */
         send_err ( m$emb_error, sqlca.sqlcode, "TFB_テレバン契約口座テーブルの取得でエラーが発生しました", NULL, NULL, G_STATION);
-
+/* %02 Edit END */
         return ERROR;
     }
 
@@ -519,7 +521,7 @@ static int readTables( char *g_szDtlMsg )
 /*   putSendData( char *g_szDtlMsg )                                         */
 /*                                                                           */
 /* Description:                                                              */
-/*   オペレータ情報提携ファイルへの書き込み                                  */
+/*   テレバン契約口座情報ファイルへの書き込み                                */
 /*                                                                           */
 /* Arguments:                                                                */
 /*   Name          Type/Length  I/O    Content                               */
