@@ -1,0 +1,406 @@
+/*==========================================================================*/
+/* Copyright　Information Services International-Dentsu, Ltd.   　          */
+/*==========================================================================*/
+/*                                                                          */
+/* SYSTEM           : BANK・R－CC                                           */
+/*                                                                          */
+/* PROGRAM NAME     : TB契約情報反映                                        */
+/*                                                                          */
+/* MODULE NAME      : TbContractReflect                                     */
+/*                                                                          */
+/* FUNCTION         : 前回のTF_顧客属性から、今回のロードしたTF_顧客属性に  */
+/*                    TB契約情報を反映する。                                */
+/*                                                                          */
+/* CALLING MODULE   : Main Module.                                          */
+/*                                                                          */
+/* CALLED MODULE    : send_err, errhandler, db_connect                      */
+/*                                                                          */
+/* ENTRY POint      : Main Module.                                          */
+/*                                                                          */
+/* INPUT            : argv[1]・・・'処理対象区分 ( A or B )                 */
+/*                                          A:TF_顧客属性B→TF_顧客属性A    */
+/*                                          B:TF_顧客属性A→TF_顧客属性B    */
+/*                                                                          */
+/* EXIT             : 正常終了       ・・・NORMAL(0)                        */
+/*                    異常終了       ・・・ERROR (9)                        */
+/*                                                                          */
+/* Mod   yy/mm/dd   Coder           Comment                                 */
+/*-----+----------+-------------+-------------------------------------------*/
+/* %00 | 15/02/12 | 土居 康一郎 | First Edition.                            */
+/* %01 | 15/02/13 | 土居 康一郎 | 終了時の処理件数のログの文言を修正        */
+/*==========================================================================*/
+/*--------------------------------------------------------------------------*/
+/* Standard include specification                                           */
+/*--------------------------------------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/*---------------------------------------------------------------------------*/
+/* User defined include specification                                        */
+/*---------------------------------------------------------------------------*/
+#include "msg.h"
+#include "common.h"
+#include "batchcommon.h"
+
+EXEC SQL INCLUDE mbproc.h;
+
+/*--------------------------------------------------------------------------*/
+/*                            DEFINE STATEMENTS                             */
+/*--------------------------------------------------------------------------*/
+#define COMMIT_COUNT 100                /* コミット件数                     */
+
+/*--------------------------------------------------------------------------*/
+/*                            EXTERNAL DECLARES                             */
+/*--------------------------------------------------------------------------*/
+EXEC SQL BEGIN DECLARE SECTION;
+    char    sqlcmd[1024];                       /* SQL Command */
+    int     cnt_kokyaku_zok;                    /* テーブル存在チェック用   */
+
+    int     h_TARGET_COUNTER;                   /* 更新先件数               */
+
+    char     h_CIFNO[11];                       /* CIFNO                    */
+    short   hi_CIFNO;
+    char     h_TB_KEIYAKU[2];                   /* テレバン契約             */
+    short   hi_TB_KEIYAKU;
+    char     h_TB_KEIYAKU_DATE[9];              /* テレバン契約日           */
+    short   hi_TB_KEIYAKU_DATE;
+
+
+EXEC SQL END DECLARE SECTION;
+
+char    process_name[43];                       /* バッチ プログラム名      */
+char    g_szDtlMsg[256];                        /* 事象詳細文字列           */
+
+/*--------------------------------------------------------------------------*/
+/*                           STRUCT DECLARATIONS                            */
+/*--------------------------------------------------------------------------*/
+
+/*--------------------------------------------------------------------------*/
+/*                           SUBROUTNE DEFINITION                           */
+/*--------------------------------------------------------------------------*/
+extern int send_err();
+extern int db_connect();
+extern void errhandler();
+
+extern void rtrim(char *);
+
+/****************************************************************************/
+/*                                                                          */
+/*                            PROCEDURE DIVISION                            */
+/*                                                                          */
+/****************************************************************************/
+
+/*--------------------------------------------------------------------------*/
+/*                              MAIN ROUTINE                                */
+/*--------------------------------------------------------------------------*/
+main( argc, argv )
+int     argc;
+char    *argv[];
+{
+/*--------------------------------------------------------------------------*/
+/*                      LOCAL VARIABLE DECLARATIONS                         */
+/*--------------------------------------------------------------------------*/
+    int         rc;
+    int         exit_code;
+    int         db_connect_flag;            /* ＤＢ接続フラグ               */
+    int         flg_cur_open;               /* カーソルオープン:属性変更    */
+    char        source_suffix[2];    /* 反映元テーブルのサフィックス A or B */
+    char        target_suffix[2];      /* 対象テーブルのサフィックス A or B */
+    long        update_counter;             /* 更新カウンター               */
+    long        update_commit_counter;
+
+/*==========================================================================*/
+/*      INITIALIZATION                                                      */
+/*==========================================================================*/
+
+    /*-----------------------------*/
+    /* Initialize environment      */
+    /*-----------------------------*/
+    exit_code        = NORMAL;
+    update_counter  = 0;
+    update_commit_counter  = 0;
+    flg_cur_open    = 0;
+    db_connect_flag = 0;
+
+    /*-----------------------------*/
+    /* Print process start message */
+    /*-----------------------------*/
+    strcpy( G_STATION, "TbContractReflect" );
+
+    memset(process_name,0x00,sizeof(process_name));
+    strcpy(process_name,"TB契約情報反映");
+
+    send_err( m$start_process, NORMAL, process_name, "", "", G_STATION );
+
+    /*--------------*/
+    /* Set Argument */
+    /*--------------*/
+    if ( argc != 2 ) {
+        send_err (m$invalid_parameter, ERROR, "引数の内容が正しくありません", NULL, NULL, G_STATION);
+        exit_code = ERROR;
+        goto ENDPROC ;
+    }
+
+    memset(source_suffix ,0x0, sizeof(source_suffix));
+    memset(target_suffix ,0x0, sizeof(target_suffix));
+    memcpy(target_suffix, argv[1], 1);
+
+    if (memcmp(target_suffix, "A",1) == 0) {
+        strcpy(source_suffix, "B");
+    } else if (memcmp(target_suffix, "B",1) == 0) {
+        strcpy(source_suffix, "A");
+    } else {
+        send_err (m$invalid_parameter, ERROR, "引数の内容が正しくありません", NULL, NULL, G_STATION);
+        exit_code = ERROR;
+        goto ENDPROC ;
+    }
+
+    /*-----------------------------*/
+    /* Setup error handler routine */
+    /*-----------------------------*/
+    EXEC SQL WHENEVER SQLERROR DO errhandler() ;
+
+    /*-----------------------------*/
+    /* Connect to database         */
+    /*-----------------------------*/
+    G_POSITION = __LINE__;
+    rc = db_connect();
+    if( rc != 0 ) {
+        send_err( m$db_connect, rc, NULL, NULL, NULL, G_STATION );
+        exit_code = ERROR;
+        goto ENDPROC;
+    }
+    db_connect_flag = 1;
+
+    /*======================================================================*/
+    /*                      メ　イ　ン　処　理                              */
+    /*======================================================================*/
+
+    /*-----------------------------*/
+    /* 顧客属性 カーソルオープン   */
+    /*-----------------------------*/
+    memset ( sqlcmd, 0x0, sizeof(sqlcmd) );
+    strcat ( sqlcmd, "SELECT ");
+    strcat ( sqlcmd, " CIFNO,");
+    strcat ( sqlcmd, " テレバン契約,");
+    strcat ( sqlcmd, " テレバン契約日 ");
+    strcat ( sqlcmd, " FROM ");
+    strcat ( sqlcmd, "  TF_顧客属性");
+    strcat ( sqlcmd, source_suffix);    /* 反映元 */
+    strcat ( sqlcmd, " WHERE テレバン契約 <> '0'");
+
+    /* 動的SQL-SQL文の解析 */
+    G_POSITION = __LINE__;
+    EXEC SQL PREPARE sql_source FROM :sqlcmd ;
+    if ( sqlca.sqlcode < 0 ) {
+        sprintf( g_szDtlMsg,
+                "カーソル(cur_source)SQL文の解析・エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+        send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, 0, "PREPARE sql_source", NULL, NULL, G_STATION );
+        exit_code = ERROR ;
+        goto ENDPROC ;
+    }
+
+    /* 動的SQL-カーソル登録 */
+    G_POSITION = __LINE__;
+    EXEC SQL DECLARE cur_source CURSOR FOR sql_source ;
+    if ( sqlca.sqlcode < 0 ) {
+        sprintf( g_szDtlMsg,
+                "カーソル(cur_source)登録・エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+        send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, 0, "DECLARE cur_source", NULL, NULL, G_STATION );
+        exit_code = ERROR ;
+        goto ENDPROC ;
+    }
+
+    /* 動的SQL-カーソルのオープン */
+    G_POSITION = __LINE__;
+    EXEC SQL OPEN cur_source ;
+    if ( sqlca.sqlcode < 0 ) {
+        sprintf( g_szDtlMsg,
+                "カーソル(cur_source)オープン・エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+        send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, 0, "OPEN cur_source", NULL, NULL, G_STATION );
+        exit_code = ERROR ;
+        goto ENDPROC ;
+    }
+
+    flg_cur_open = 1;
+
+    /*-----------------------------*/
+    /* メインループ 開始           */
+    /*-----------------------------*/
+    while( 1 ) {
+        memset( h_CIFNO,             0x00, sizeof(h_CIFNO) );
+        memset( h_TB_KEIYAKU,        0x00, sizeof(h_TB_KEIYAKU) );
+        memset( h_TB_KEIYAKU_DATE,   0x00, sizeof(h_TB_KEIYAKU_DATE) );
+
+        /*-----------------------------*/
+        /* レコード Fetch              */
+        /*-----------------------------*/
+        G_POSITION = __LINE__;
+        EXEC SQL FETCH cur_source INTO
+            :h_CIFNO            :hi_CIFNO,              /* CIFNO */
+            :h_TB_KEIYAKU       :hi_TB_KEIYAKU,         /*テレバン契約 */
+            :h_TB_KEIYAKU_DATE  :hi_TB_KEIYAKU_DATE;    /* レバン契約日 */
+
+        if( sqlca.sqlcode < 0 ){
+            send_err( m$sql_statment, sqlca.sqlcode, "FETCH cur_source", NULL, NULL, G_STATION );
+            exit_code = ERROR;
+            goto ENDPROC;
+        }
+
+        if( sqlca.sqlcode == ORA_NOF ){
+            if( update_commit_counter == 0 && update_counter == 0){
+                send_err ( m$message1,NORMAL,"テレバン契約データはありませんでした。",NULL,NULL,G_STATION);
+            }
+            break;
+        }
+
+
+        /*-------------------------------*/
+        /* 顧客が反映先に存在するか確認  */
+        /*-------------------------------*/
+        memset ( sqlcmd, 0x0, sizeof(sqlcmd) );
+        strcat ( sqlcmd, "begin SELECT COUNT(CIFNO) ");
+        strcat ( sqlcmd, "INTO :h_TARGET_COUNTER ");
+        strcat ( sqlcmd, "FROM ");
+        strcat ( sqlcmd, " TF_顧客属性");
+        strcat ( sqlcmd, target_suffix);    /* 更新先 */
+        strcat ( sqlcmd, " WHERE ");
+        strcat ( sqlcmd, "  CIFNO = '");
+        strcat ( sqlcmd, h_CIFNO );
+        strcat ( sqlcmd, "'; end;");
+
+        /* 動的SQL-SQL文の解析 */
+        G_POSITION = __LINE__;
+        EXEC SQL PREPARE my_stmt01 FROM :sqlcmd;
+        if (sqlca.sqlcode < 0) {
+            sprintf( g_szDtlMsg,
+                    "SQL文の解析・エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+            send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+            send_err ( m$sql_statment, sqlca.sqlcode, sqlcmd, NULL, NULL, G_STATION);
+
+            exit_code = ERROR;
+            goto ENDPROC;
+        }
+
+        /* 反映先の顧客属性の件数を取得 */
+        G_POSITION = __LINE__;
+        EXEC SQL EXECUTE my_stmt01 USING :h_TARGET_COUNTER;
+
+        if (sqlca.sqlcode < 0) {
+            sprintf( g_szDtlMsg,
+                    "反映先の顧客属性の存在チェックに失敗しました。(CIFNO=%s)",h_CIFNO);
+            send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+            send_err ( m$sql_statment, sqlca.sqlcode, sqlcmd, NULL, NULL, G_STATION);
+
+            exit_code = ERROR;
+            goto ENDPROC;
+        }
+
+        /*---------------------------------------------------------------------------------*/
+        /* 顧客が反映先に存在する場合、前回の顧客属性のテレバン契約、テレバン契約日を更新  */
+        /*---------------------------------------------------------------------------------*/
+        if (h_TARGET_COUNTER != 0) {
+
+            memset ( sqlcmd, 0x0, sizeof(sqlcmd) );
+            strcpy ( sqlcmd, "UPDATE TF_顧客属性");
+            strcat ( sqlcmd, target_suffix);    /* 更新先 */
+            strcat ( sqlcmd, " SET テレバン契約 = '");
+            strcat ( sqlcmd, h_TB_KEIYAKU);    /* テレバン契約 */
+            strcat ( sqlcmd, "', ");
+
+            if (hi_TB_KEIYAKU_DATE == ORA_NULL) {
+                strcat ( sqlcmd, " テレバン契約日 = NULL ");
+            } else {
+                strcat ( sqlcmd, " テレバン契約日 = '");
+                strcat ( sqlcmd, h_TB_KEIYAKU_DATE);    /* 契約日 */
+                strcat ( sqlcmd, "' ");
+            }
+            strcat ( sqlcmd, "WHERE ");
+            strcat ( sqlcmd, " CIFNO = '");
+            strcat ( sqlcmd, h_CIFNO);
+            strcat ( sqlcmd, "'");
+
+
+            G_POSITION = __LINE__;
+            EXEC SQL EXECUTE IMMEDIATE :sqlcmd;
+            if( sqlca.sqlcode < 0 ){
+                sprintf( g_szDtlMsg,
+                        "TF_顧客属性%sの更新に失敗しました。(sqlca.sqlcode=%d)", target_suffix, sqlca.sqlcode );
+                send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+                send_err ( m$sql_statment, sqlca.sqlcode, sqlcmd, NULL, NULL, G_STATION);
+
+                exit_code = ERROR;
+                goto ENDPROC;
+            }
+
+            /*------------------------------------*/
+            /* 更新数が一定数を超えるとコミット   */
+            /*-----------------------------*------*/
+            update_counter++;
+            if (update_counter>= COMMIT_COUNT) {
+                G_POSITION = __LINE__;
+                EXEC SQL COMMIT WORK;
+                if( sqlca.sqlcode < 0 ){
+                    send_err( m$sql_statment, sqlca.sqlcode, "COMMIT", NULL, NULL, G_STATION );
+
+                    exit_code = ERROR;
+                    goto ENDPROC;
+                }
+
+				update_commit_counter = update_commit_counter + update_counter;
+				update_counter = 0;
+
+				/*------------------------------------*/
+				/* 処理件数をログ出力                 */
+				/*------------------------------------*/
+				sprintf(g_szDtlMsg, "%ldレコード 処理完了", update_commit_counter);
+                send_err(m$message1, 0, g_szDtlMsg, NULL, NULL, G_STATION);
+            }
+        }
+    }
+
+    /*--------------------------------------------------------------------------*/
+    /*                              終了処理                                    */
+    /*--------------------------------------------------------------------------*/
+
+ENDPROC:
+    if(flg_cur_open == 1){
+        EXEC SQL CLOSE cur_source;
+    }
+
+    /* ＤＢ切断 */
+    if( db_connect_flag == 1 ){
+        if ( exit_code == NORMAL ){
+            EXEC SQL COMMIT WORK RELEASE;
+            update_commit_counter = update_commit_counter + update_counter;
+        }
+        else{
+            EXEC SQL ROLLBACK WORK RELEASE;
+        }
+    }
+
+    /* 終了メッセージ出力 */
+    if ( exit_code == NORMAL ){
+
+        if (update_commit_counter > 0) {
+/* %01 Edit START */
+            sprintf(g_szDtlMsg, "%ld件のTB契約情報をTF_顧客属性%sに反映しました。", update_commit_counter, target_suffix);
+/* %01 Edit END */
+            send_err(m$message1, 0, g_szDtlMsg, NULL, NULL, G_STATION);
+        }
+        send_err( m$stop_process, NORMAL, process_name, "", "", G_STATION );
+    }
+    else {
+        send_err( m$abend_process, ERROR, process_name, "", "", G_STATION );
+    }
+
+    exit(exit_code);
+
+}
+/*==========================================================================*/
+/* End of File                                                  　          */
+/*==========================================================================*/
