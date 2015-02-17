@@ -1,0 +1,1858 @@
+/*==========================================================================*/
+/* Copyright　Information Services International-Dentsu, Ltd.   　          */
+/*==========================================================================*/
+/*                                                                          */
+/* SYSTEM           : BANK・R－CC                                           */
+/*                                                                          */
+/* PROGRAM NAME     : 未取引先反映                                          */
+/*                                                                          */
+/* MODULE NAME      : NoDealCustReflect                                     */
+/*                                                                          */
+/* FUNCTION         : 前回のTF_顧客属性から、今回のロードしたTF_顧客属性に  */
+/*                    未取引先(連携データ取込画面で取り込んだ顧客)の反映を  */
+/*                    実施する。                                            */
+/*                                                                          */
+/* CALLING MODULE   : Main Module.                                          */
+/*                                                                          */
+/* CALLED MODULE    : send_err, errhandler, db_connect                      */
+/*                                                                          */
+/* ENTRY POint      : Main Module.                                          */
+/*                                                                          */
+/* INPUT            : argv[1]・・・'処理対象区分 ( A or B )                 */
+/*                                          A:TF_顧客属性B→TF_顧客属性A    */
+/*                                          B:TF_顧客属性A→TF_顧客属性B    */
+/*                                                                          */
+/* EXIT             : 正常終了       ・・・NORMAL(0)                        */
+/*                    異常終了       ・・・ERROR (9)                        */
+/*                                                                          */
+/* Mod   yy/mm/dd   Coder           Comment                                 */
+/*-----+----------+-------------+-------------------------------------------*/
+/* %00 | 15/02/16 | 土居 康一郎 | First Edition.                            */
+/*==========================================================================*/
+/*--------------------------------------------------------------------------*/
+/* Standard include specification                                           */
+/*--------------------------------------------------------------------------*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/*---------------------------------------------------------------------------*/
+/* User defined include specification                                        */
+/*---------------------------------------------------------------------------*/
+#include "msg.h"
+#include "common.h"
+#include "batchcommon.h"
+
+EXEC SQL INCLUDE mbproc.h;
+EXEC SQL INCLUDE TF_KokyakuZokusei.h;  /* TF_顧客属性 */
+
+/*--------------------------------------------------------------------------*/
+/*                            DEFINE STATEMENTS                             */
+/*--------------------------------------------------------------------------*/
+#define COMMIT_COUNT 100                /* コミット件数                     */
+
+/*--------------------------------------------------------------------------*/
+/*                            EXTERNAL DECLARES                             */
+/*--------------------------------------------------------------------------*/
+EXEC SQL BEGIN DECLARE SECTION;
+    char    sqlcmd[4096];                       /* SQL Command */
+
+EXEC SQL END DECLARE SECTION;
+
+char    process_name[43];                       /* バッチ プログラム名      */
+char    g_szDtlMsg[256];                        /* 事象詳細文字列           */
+
+/*--------------------------------------------------------------------------*/
+/*                           STRUCT DECLARATIONS                            */
+/*--------------------------------------------------------------------------*/
+
+/*--------------------------------------------------------------------------*/
+/*                           SUBROUTNE DEFINITION                           */
+/*--------------------------------------------------------------------------*/
+extern int send_err();
+extern int db_connect();
+extern void errhandler();
+
+extern void rtrim(char *);
+
+extern void clearHostVariable();
+extern int insertKokyakuZokusaiA(char *);
+extern int insertKokyakuZokusaiB(char *);
+
+/****************************************************************************/
+/*                                                                          */
+/*                            PROCEDURE DIVISION                            */
+/*                                                                          */
+/****************************************************************************/
+
+/*--------------------------------------------------------------------------*/
+/*                              MAIN ROUTINE                                */
+/*--------------------------------------------------------------------------*/
+main( argc, argv )
+int     argc;
+char    *argv[];
+{
+/*--------------------------------------------------------------------------*/
+/*                      LOCAL VARIABLE DECLARATIONS                         */
+/*--------------------------------------------------------------------------*/
+    int         rc;
+    int         exit_code;
+    int         db_connect_flag;            /* ＤＢ接続フラグ               */
+    int         flg_cur_open;               /* カーソルオープン:属性変更    */
+    char        source_suffix[2];    /* 反映元テーブルのサフィックス A or B */
+    char        target_suffix[2];      /* 対象テーブルのサフィックス A or B */
+    long        update_counter;             /* 更新カウンター               */
+    long        update_commit_counter;
+
+/*==========================================================================*/
+/*      INITIALIZATION                                                      */
+/*==========================================================================*/
+
+    /*-----------------------------*/
+    /* Initialize environment      */
+    /*-----------------------------*/
+    exit_code        = NORMAL;
+    update_counter  = 0;
+    update_commit_counter  = 0;
+    flg_cur_open    = 0;
+    db_connect_flag = 0;
+
+    /*-----------------------------*/
+    /* Print process start message */
+    /*-----------------------------*/
+    strcpy( G_STATION, "NoDealCustReflect" );
+
+    memset(process_name,0x00,sizeof(process_name));
+    strcpy(process_name,"未取引先反映");
+
+    send_err( m$start_process, NORMAL, process_name, "", "", G_STATION );
+
+    /*--------------*/
+    /* Set Argument */
+    /*--------------*/
+    if ( argc != 2 ) {
+        send_err (m$invalid_parameter, ERROR, "引数の内容が正しくありません", NULL, NULL, G_STATION);
+        exit_code = ERROR;
+        goto ENDPROC ;
+    }
+
+    memset(source_suffix ,0x0, sizeof(source_suffix));
+    memset(target_suffix ,0x0, sizeof(target_suffix));
+    memcpy(target_suffix, argv[1], 1);
+
+    if (memcmp(target_suffix, "A",1) == 0) {
+        strcpy(source_suffix, "B");
+    } else if (memcmp(target_suffix, "B",1) == 0) {
+        strcpy(source_suffix, "A");
+    } else {
+        send_err (m$invalid_parameter, ERROR, "引数の内容が正しくありません", NULL, NULL, G_STATION);
+        exit_code = ERROR;
+        goto ENDPROC ;
+    }
+
+    /*-----------------------------*/
+    /* Setup error handler routine */
+    /*-----------------------------*/
+    EXEC SQL WHENEVER SQLERROR DO errhandler() ;
+
+    /*-----------------------------*/
+    /* Connect to database         */
+    /*-----------------------------*/
+    G_POSITION = __LINE__;
+    rc = db_connect();
+    if( rc != 0 ) {
+        send_err( m$db_connect, rc, NULL, NULL, NULL, G_STATION );
+        exit_code = ERROR;
+        goto ENDPROC;
+    }
+    db_connect_flag = 1;
+
+    /*======================================================================*/
+    /*                      メ　イ　ン　処　理                              */
+    /*======================================================================*/
+
+    /*-----------------------------*/
+    /* 顧客属性 カーソルオープン   */
+    /*-----------------------------*/
+    memset ( sqlcmd, 0x0, sizeof(sqlcmd) );
+    strcat ( sqlcmd, "SELECT ");
+
+    strcat ( sqlcmd, " 店番,");
+    strcat ( sqlcmd, " CIFNO,");
+    strcat ( sqlcmd, " 個人企業番号,");
+    strcat ( sqlcmd, " 人格区分,");
+    strcat ( sqlcmd, " 世帯番号,");
+    strcat ( sqlcmd, " 氏名漢字,");
+    strcat ( sqlcmd, " 氏名漢字更新フラグ,");
+    strcat ( sqlcmd, " 氏名カナ,");
+    strcat ( sqlcmd, " 氏名カナ更新フラグ,");
+    strcat ( sqlcmd, " 性別,");
+    strcat ( sqlcmd, " 性別更新フラグ,");
+    strcat ( sqlcmd, " 生年月日,");
+    strcat ( sqlcmd, " 生年月日更新フラグ,");
+    strcat ( sqlcmd, " 住所コード,");
+    strcat ( sqlcmd, " 郵便番号,");
+    strcat ( sqlcmd, " 補助住所,");
+    strcat ( sqlcmd, " 住所変更フラグ,");
+    strcat ( sqlcmd, " 補助住所カナ,");
+    strcat ( sqlcmd, " 住所カナ変更フラグ,");
+    strcat ( sqlcmd, " 自宅電話番号,");
+    strcat ( sqlcmd, " 自宅電話番号更新フラグ,");
+    strcat ( sqlcmd, " 自宅FAX番号,");
+    strcat ( sqlcmd, " 自宅FAX番号更新フラグ,");
+    strcat ( sqlcmd, " 携帯電話番号,");
+    strcat ( sqlcmd, " 携帯電話番号更新フラグ,");
+    strcat ( sqlcmd, " MAILアドレス,");
+    strcat ( sqlcmd, " MAILアドレス更新フラグ,");
+    strcat ( sqlcmd, " 勤務先名,");
+    strcat ( sqlcmd, " 勤務先名更新フラグ,");
+    strcat ( sqlcmd, " 勤務先名カナ,");
+    strcat ( sqlcmd, " 勤務先名カナ更新フラグ,");
+    strcat ( sqlcmd, " 勤務先電話番号,");
+    strcat ( sqlcmd, " 勤務先電話番号更新フラグ,");
+    strcat ( sqlcmd, " 連絡先住所コード,");
+    strcat ( sqlcmd, " 連絡先郵便番号,");
+    strcat ( sqlcmd, " 連絡先補助住所,");
+    strcat ( sqlcmd, " 連絡先住所変更フラグ,");
+    strcat ( sqlcmd, " 連絡先補助住所カナ,");
+    strcat ( sqlcmd, " 連絡先住所カナ変更フラグ,");
+    strcat ( sqlcmd, " 連絡先電話番号,");
+    strcat ( sqlcmd, " 連絡先電話番号更新フラグ,");
+    strcat ( sqlcmd, " 連絡先FAX番号,");
+    strcat ( sqlcmd, " 連絡先FAX番号更新フラグ,");
+    strcat ( sqlcmd, " 日中連絡先電話番号,");
+    strcat ( sqlcmd, " 日中連絡先電話番号更新フラグ,");
+    strcat ( sqlcmd, " 取引開始日,");
+    strcat ( sqlcmd, " 世帯主フラグ,");
+    strcat ( sqlcmd, " 行員区分,");
+    strcat ( sqlcmd, " 郵便不着,");
+    strcat ( sqlcmd, " 会社寮,");
+    strcat ( sqlcmd, " 電話番号間違い,");
+    strcat ( sqlcmd, " 移転,");
+    strcat ( sqlcmd, " 本人死亡,");
+    strcat ( sqlcmd, " 案内区分,");
+    strcat ( sqlcmd, " 優良区分,");
+    strcat ( sqlcmd, " 未取引先,");
+    strcat ( sqlcmd, " マル優申告額,");
+    strcat ( sqlcmd, " マル優利用額,");
+    strcat ( sqlcmd, " マル特申告額,");
+    strcat ( sqlcmd, " マル特利用額,");
+    strcat ( sqlcmd, " 当行金融資産残高,");
+    strcat ( sqlcmd, " 預り資産残高１,");
+    strcat ( sqlcmd, " 預り資産残高２,");
+    strcat ( sqlcmd, " 預り資産残高３,");
+    strcat ( sqlcmd, " 流動性預金残高,");
+    strcat ( sqlcmd, " 定期性預金残高,");
+    strcat ( sqlcmd, " 仕組預金残高,");
+    strcat ( sqlcmd, " 外貨預金残高,");
+    strcat ( sqlcmd, " 投信残高,");
+    strcat ( sqlcmd, " 債券残高,");
+    strcat ( sqlcmd, " リスク商品残高,");
+    strcat ( sqlcmd, " テレバン契約,");
+    strcat ( sqlcmd, " テレバン契約日,");
+    strcat ( sqlcmd, " IB契約,");
+    strcat ( sqlcmd, " IB契約者ID,");
+    strcat ( sqlcmd, " IB契約申込店番,");
+    strcat ( sqlcmd, " IB契約代表口座科目,");
+    strcat ( sqlcmd, " IB契約代表口座番号,");
+    strcat ( sqlcmd, " IB契約日,");
+    strcat ( sqlcmd, " IB契約解除日,");
+    strcat ( sqlcmd, " IB契約最終更新日,");
+    strcat ( sqlcmd, " ネット支店契約,");
+    strcat ( sqlcmd, " ネット支店契約者ID,");
+    strcat ( sqlcmd, " ネット支店契約申込店番,");
+    strcat ( sqlcmd, " ネット支店契約代表口座科目,");
+    strcat ( sqlcmd, " ネット支店契約代表口座口番号,");
+    strcat ( sqlcmd, " ネット支店契約日,");
+    strcat ( sqlcmd, " ネット支店契約解除日,");
+    strcat ( sqlcmd, " ネット支店契約最終更新日,");
+    strcat ( sqlcmd, " ホストTM対象区分,");
+    strcat ( sqlcmd, " ホストDM対象区分,");
+    strcat ( sqlcmd, " TM対象区分,");
+    strcat ( sqlcmd, " DM対象区分,");
+    strcat ( sqlcmd, " 職業コード,");
+    strcat ( sqlcmd, " 年収,");
+    strcat ( sqlcmd, " 所得年度,");
+    strcat ( sqlcmd, " 取引管理情報,");
+    strcat ( sqlcmd, " 担当者名,");
+    strcat ( sqlcmd, " カード発行サイン,");
+    strcat ( sqlcmd, " 自宅住所都道府県,");
+    strcat ( sqlcmd, " 自宅住所市区町村,");
+    strcat ( sqlcmd, " 自宅住所大字通称,");
+    strcat ( sqlcmd, " 自宅住所字丁目,");
+    strcat ( sqlcmd, " 自宅住所番地気付,");
+    strcat ( sqlcmd, " 自宅住所気付,");
+    strcat ( sqlcmd, " 自宅住所都道府県カナ,");
+    strcat ( sqlcmd, " 自宅住所市区町村カナ,");
+    strcat ( sqlcmd, " 自宅住所大字通称カナ,");
+    strcat ( sqlcmd, " 自宅住所字丁目カナ,");
+    strcat ( sqlcmd, " 自宅住所番地気付カナ,");
+    strcat ( sqlcmd, " 自宅住所気付カナ,");
+    strcat ( sqlcmd, " 自宅住所,");
+    strcat ( sqlcmd, " 自宅住所カナ,");
+    strcat ( sqlcmd, " 連絡先住所都道府県,");
+    strcat ( sqlcmd, " 連絡先住所市区町村,");
+    strcat ( sqlcmd, " 連絡先住所大字通称,");
+    strcat ( sqlcmd, " 連絡先住所字丁目,");
+    strcat ( sqlcmd, " 連絡先住所番地気付,");
+    strcat ( sqlcmd, " 連絡先住所気付,");
+    strcat ( sqlcmd, " 連絡先住所都道府県カナ,");
+    strcat ( sqlcmd, " 連絡先住所市区町村カナ,");
+    strcat ( sqlcmd, " 連絡先住所大字通称カナ,");
+    strcat ( sqlcmd, " 連絡先住所字丁目カナ,");
+    strcat ( sqlcmd, " 連絡先住所番地気付カナ,");
+    strcat ( sqlcmd, " 連絡先住所気付カナ,");
+    strcat ( sqlcmd, " 連絡先住所,");
+    strcat ( sqlcmd, " 連絡先住所カナ,");
+    strcat ( sqlcmd, " データ基準日,");
+    strcat ( sqlcmd, " マル優");
+
+    strcat ( sqlcmd, " FROM ");
+    strcat ( sqlcmd, "  TF_顧客属性");
+    strcat ( sqlcmd, source_suffix);    /* 反映元 */
+    strcat ( sqlcmd, " WHERE 未取引先 = '1'");
+
+    /* 動的SQL-SQL文の解析 */
+    G_POSITION = __LINE__;
+    EXEC SQL PREPARE sql_source FROM :sqlcmd ;
+    if ( sqlca.sqlcode < 0 ) {
+        sprintf( g_szDtlMsg,
+                "カーソル(cur_source)SQL文の解析・エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+        send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, 0, "PREPARE sql_source", NULL, NULL, G_STATION );
+        exit_code = ERROR ;
+        goto ENDPROC ;
+    }
+
+    /* 動的SQL-カーソル登録 */
+    G_POSITION = __LINE__;
+    EXEC SQL DECLARE cur_source CURSOR FOR sql_source ;
+    if ( sqlca.sqlcode < 0 ) {
+        sprintf( g_szDtlMsg,
+                "カーソル(cur_source)登録・エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+        send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, 0, "DECLARE cur_source", NULL, NULL, G_STATION );
+        exit_code = ERROR ;
+        goto ENDPROC ;
+    }
+
+    /* 動的SQL-カーソルのオープン */
+    G_POSITION = __LINE__;
+    EXEC SQL OPEN cur_source ;
+    if ( sqlca.sqlcode < 0 ) {
+        sprintf( g_szDtlMsg,
+                "カーソル(cur_source)オープン・エラー(sqlca.sqlcode=%d)",sqlca.sqlcode);
+        send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, 0, "OPEN cur_source", NULL, NULL, G_STATION );
+        exit_code = ERROR ;
+        goto ENDPROC ;
+    }
+
+    flg_cur_open = 1;
+
+    /*-----------------------------*/
+    /* メインループ 開始           */
+    /*-----------------------------*/
+    while( 1 ) {
+
+        /* ホスト変数クリア */
+        clearHostVariable();
+
+
+        /*-----------------------------*/
+        /* レコード Fetch              */
+        /*-----------------------------*/
+        G_POSITION = __LINE__;
+        EXEC SQL FETCH cur_source INTO
+            :TMKZs_tenban :TMKZsi_tenban,                   /* 店番 */
+            :TMKZs_cifno :TMKZsi_cifno,                     /* CIFNO */
+            :TMKZs_kojin_kigyo_no :TMKZsi_kojin_kigyo_no,   /* 個人企業番号 */
+            :TMKZs_jinkaku_kbn :TMKZsi_jinkaku_kbn,         /* 人格区分 */
+            :TMKZs_setai_no :TMKZsi_setai_no,               /* 世帯番号 */
+            :TMKZs_name_knj :TMKZsi_name_knj,               /* 氏名漢字 */
+            :TMKZs_name_knj_flg :TMKZsi_name_knj_flg,       /* 氏名漢字更新フラグ */
+            :TMKZs_name_kna :TMKZsi_name_kna,               /* 氏名カナ */
+            :TMKZs_name_kna_flg :TMKZsi_name_kna_flg,       /* 氏名カナ更新フラグ */
+            :TMKZs_sex :TMKZsi_sex,                         /* 性別 */
+            :TMKZs_sex_flg :TMKZsi_sex_flg,                 /* 性別更新フラグ */
+            :TMKZs_birthday :TMKZsi_birthday,               /* 生年月日 */
+            :TMKZs_birthday_flg :TMKZsi_birthday_flg,       /* 生年月日更新フラグ */
+            :TMKZs_zip_cd :TMKZsi_zip_cd,                   /* 住所コード */
+            :TMKZs_zip :TMKZsi_zip,                         /* 郵便番号 */
+            :TMKZs_hojo_jyusyo :TMKZsi_hojo_jyusyo,         /* 補助住所 */
+            :TMKZs_addressflg :TMKZsi_addressflg,           /* 住所変更フラグ */
+            :TMKZs_hojo_jyusyo_kana :TMKZsi_hojo_jyusyo_kana,    /* 補助住所カナ */
+            :TMKZs_address_kana_flg :TMKZsi_address_kana_flg,    /* 住所カナ変更フラグ */
+
+            :TMKZs_jitakutel :TMKZsi_jitakutel,             /* 自宅電話番号 */
+            :TMKZs_jitakutel_flg :TMKZsi_jitakutel_flg,     /* 自宅電話番号更新フラグ */
+            :TMKZs_jitaku_fax :TMKZsi_jitaku_fax,           /* 自宅FAX番号 */
+            :TMKZs_jitaku_fax_flg :TMKZsi_jitaku_fax_flg,   /* 自宅FAX番号更新フラグ */
+            :TMKZs_keitai_tel :TMKZsi_keitai_tel,           /* 携帯電話番号 */
+            :TMKZs_keitai_tel_flg :TMKZsi_keitai_tel_flg,   /* 携帯電話番号更新フラグ */
+
+            :TMKZs_mail :TMKZsi_mail,                       /* MAILアドレス */
+            :TMKZs_mail_flg :TMKZsi_mail_flg,               /* MAILアドレス更新フラグ */
+
+            :TMKZs_kinmusaki :TMKZsi_kinmusaki,                     /* 勤務先名漢字 */
+            :TMKZs_kinmusaki_flg :TMKZsi_kinmusaki_flg,             /* 勤務先名漢字更新フラグ */
+            :TMKZs_kinmusaki_kana :TMKZsi_kinmusaki_kana,           /* 勤務先名カナ */
+            :TMKZs_kinmusaki_kana_flg :TMKZsi_kinmusaki_kana_flg,   /* 勤務先名カナ更新フラグ */
+            :TMKZs_kinmusaki_tel :TMKZsi_kinmusaki_tel,             /* 勤務先電話番号 */
+            :TMKZs_kinmusaki_tel_flg :TMKZsi_kinmusaki_tel_flg,     /* 勤務先電話番号更新フラグ */
+
+            :TMKZs_renrakusaki_zip_cd :TMKZsi_renrakusaki_zip_cd,           /* 連絡先住所コード */
+            :TMKZs_renrakusaki_zip :TMKZsi_renrakusaki_zip,                 /* 連絡先郵便番号 */
+            :TMKZs_renrakusaki_hojo_jyusyo :TMKZsi_renrakusaki_hojo_jyusyo, /* 連絡先補助住所 */
+            :TMKZs_renrakusaki_addressflg :TMKZsi_renrakusaki_addressflg,   /* 連絡先住所変更フラグ */
+            :TMKZs_renrakusaki_hojo_jyusyo_kana  :TMKZsi_renrakusaki_hojo_jyusyo_kana,  /* 連絡先補助住所カナ */
+            :TMKZs_renrakusaki_address_kana_flg :TMKZsi_renrakusaki_address_kana_flg,   /* 連絡先住所カナ変更フラグ */
+            :TMKZs_renrakusaki_tel :TMKZsi_renrakusaki_tel,                 /* 連絡先電話番号 */
+            :TMKZs_renrakusaki_tel_flg :TMKZsi_renrakusaki_tel_flg,         /* 連絡先電話番号更新フラグ */
+            :TMKZs_renrakusaki_fax :TMKZsi_renrakusaki_fax,                 /* 連絡先FAX番号 */
+            :TMKZs_renrakusaki_fax_flg :TMKZsi_renrakusaki_fax_flg,         /* 連絡先FAX番号更新フラグ */
+
+            :TMKZs_nicchu_tel :TMKZsi_nicchu_tel,                   /* 日中連絡先電話番号 */
+            :TMKZs_nicchu_tel_flg :TMKZsi_nicchu_tel_flg,           /* 日中連絡先電話番号更新フラグ */
+
+            :TMKZs_deal_day :TMKZsi_deal_day,               /* 取引開始日 */
+
+            :TMKZs_setai_flg :TMKZsi_setai_flg,             /* 世帯主フラグ */
+            :TMKZs_kouin_kbn :TMKZsi_kouin_kbn,             /* 行員区分 */
+            :TMKZs_futyaku :TMKZsi_futyaku,                 /* 郵便不着 */
+            :TMKZs_kaisya_ryo :TMKZsi_kaisya_ryo,           /* 会社寮 */
+            :TMKZs_denwa_matigai :TMKZsi_denwa_matigai,     /* 電話番号間違い */
+            :TMKZs_iten :TMKZsi_iten,                       /* 移転 */
+            :TMKZs_honnin_sibo :TMKZsi_honnin_sibo,         /* 本人死亡 */
+            :TMKZs_annai_kbn :TMKZsi_annai_kbn,             /*  案内区分 */
+            :TMKZs_yuryo_kbn :TMKZsi_yuryo_kbn,             /*  優良区分 */
+            :TMKZs_mitorihikisaki :TMKZsi_mitorihikisaki,    /*  未取引先 */
+
+            :TMKZs_yu_shinkoku :TMKZsi_yu_shinkoku,         /* マル優申告額 */
+            :TMKZs_yu_riyo :TMKZsi_yu_riyo,                 /* マル優利用額 */
+            :TMKZs_toku_shinkoku :TMKZsi_toku_shinkoku,     /* マル特申告額 */
+            :TMKZs_toku_riyo :TMKZsi_toku_riyo,             /* マル特利用額 */
+
+            :TMKZs_zandaka :TMKZsi_zandaka,                     /* 当行金融資産残高 */
+            :TMKZs_azukari_shisan1 :TMKZsi_azukari_shisan1,     /* 預り資産残高１ */
+            :TMKZs_azukari_shisan2 :TMKZsi_azukari_shisan2,     /* 預り資産残高２ */
+            :TMKZs_azukari_shisan3 :TMKZsi_azukari_shisan3,     /* 預り資産残高３ */
+            :TMKZs_ryudo_zandaka :TMKZsi_ryudo_zandaka,         /* 流動性預金残高 */
+            :TMKZs_teiki_zandaka :TMKZsi_teiki_zandaka,         /* 定期性預金残高 */
+            :TMKZs_shikumi_zandaka :TMKZsi_shikumi_zandaka,     /* 仕組預金残高 */
+            :TMKZs_gaika_zandaka :TMKZsi_gaika_zandaka,         /* 外貨預金残高 */
+            :TMKZs_toushin_zandaka :TMKZsi_toushin_zandaka,     /* 投信残高 */
+            :TMKZs_saiken_zandaka :TMKZsi_saiken_zandaka,       /* 債券残高 */
+            :TMKZs_risk_zandaka :TMKZsi_risk_zandaka,           /* リスク商品残高 */
+
+            :TMKZs_TB_contract :TMKZsi_TB_contract,             /* テレバン契約 */
+            :TMKZs_TB_contract_day :TMKZsi_TB_contract_day,     /* テレバン契約日 */
+
+            :TMKZs_IB_contract :TMKZsi_IB_contract,             /* IB契約 */
+            :TMKZs_IB_contract_id :TMKZsi_IB_contract_id,       /* IB契約者ID */
+            :TMKZs_IB_branch_id :TMKZsi_IB_branch_id,           /* IB契約申込店番 */
+            :TMKZs_IB_accnt_id :TMKZsi_IB_accnt_id,             /* IB契約代表口座科目 */
+            :TMKZs_IB_kuchi_no :TMKZsi_IB_kuchi_no,             /* IB契約代表口座番号 */
+            :TMKZs_IB_contract_day :TMKZsi_IB_contract_day,     /* IB契約日 */
+            :TMKZs_IB_cancel_day :TMKZsi_IB_cancel_day,         /* IB契約解約日 */
+            :TMKZs_IB_update_day :TMKZsi_IB_update_day,         /* IB契約最終更新日 */
+
+            :TMKZs_net_contract :TMKZsi_net_contract,           /* ネット支店契約 */
+            :TMKZs_net_contract_id :TMKZsi_net_contract_id,     /* ネット支店契約者ID */
+            :TMKZs_net_branch_id :TMKZsi_net_branch_id,         /* ネット支店契約申込店番 */
+            :TMKZs_net_accnt_id :TMKZsi_net_accnt_id,           /* ネット支店契約代表口座科目 */
+            :TMKZs_net_kuchi_no :TMKZsi_net_kuchi_no,           /* ネット支店契約代表口座口番号 */
+            :TMKZs_net_contract_day :TMKZsi_net_contract_day,   /* ネット支店契約日 */
+            :TMKZs_net_cancel_day :TMKZsi_net_cancel_day,       /* ネット支店契約解約日 */
+            :TMKZs_net_update_day :TMKZsi_net_update_day,       /* ネット支店契約最終更新日 */
+
+            :TMKZs_host_tm :TMKZsi_host_tm,                     /* ホストTM対象区分 */
+            :TMKZs_host_dm :TMKZsi_host_dm,                     /* ホストDM対象区分 */
+            :TMKZs_tm :TMKZsi_tm,                               /* TM対象区分 */
+            :TMKZs_dm :TMKZsi_dm,                               /* DM対象区分 */
+
+            :TMKZs_occp_code :TMKZsi_occp_code,                 /* 職業コード */
+            :TMKZs_income :TMKZsi_income,                       /* 年収 */
+            :TMKZs_income_year :TMKZsi_income_year,             /* 所得年度 */
+            :TMKZs_torikan :TMKZsi_torikan,                     /* 取引管理情報 */
+            :TMKZs_operate_name :TMKZsi_operate_name,           /* 担当者名 */
+            :TMKZs_card_sign :TMKZsi_card_sign,                 /* カード発行サイン */
+
+            :TMKZs_adress1 :TMKZsi_adress1,                     /* 自宅住所都道府県 */
+            :TMKZs_adress2 :TMKZsi_adress2,                     /* 自宅住所市区町村 */
+            :TMKZs_adress3 :TMKZsi_adress3,                     /* 自宅住所大字通称 */
+            :TMKZs_adress4 :TMKZsi_adress4,                     /* 自宅住所字丁目 */
+            :TMKZs_adress5 :TMKZsi_adress5,                     /* 自宅住所番地気付 */
+            :TMKZs_adress6 :TMKZsi_adress6,                     /* 自宅住所気付 【未使用】*/
+
+            :TMKZs_adress_kana1 :TMKZsi_adress_kana1,           /* 自宅住所都道府県カナ */
+            :TMKZs_adress_kana2 :TMKZsi_adress_kana2,           /* 自宅住所市区町村カナ */
+            :TMKZs_adress_kana3 :TMKZsi_adress_kana3,           /* 自宅住所大字通称カナ */
+            :TMKZs_adress_kana4 :TMKZsi_adress_kana4,           /* 自宅住所字丁目カナ */
+            :TMKZs_adress_kana5 :TMKZsi_adress_kana5,           /* 自宅住所番地気付カナ */
+            :TMKZs_adress_kana6 :TMKZsi_adress_kana6,           /* 自宅住所気付カナ 【未使用】*/
+
+            :TMKZs_adress :TMKZsi_adress,                       /* 自宅住所 */
+            :TMKZs_adress_kana :TMKZsi_adress_kana,             /* 自宅住所カナ */
+
+            :TMKZs_renrakusaki_adress1 :TMKZsi_renrakusaki_adress1,     /* 連絡先住所都道府県 */
+            :TMKZs_renrakusaki_adress2 :TMKZsi_renrakusaki_adress2,     /* 連絡先住所市区町村 */
+            :TMKZs_renrakusaki_adress3 :TMKZsi_renrakusaki_adress3,     /* 連絡先住所大字通称 */
+            :TMKZs_renrakusaki_adress4 :TMKZsi_renrakusaki_adress4,     /* 連絡先住所字丁目 */
+            :TMKZs_renrakusaki_adress5 :TMKZsi_renrakusaki_adress5,     /* 連絡先住所番地気付 */
+            :TMKZs_renrakusaki_adress6 :TMKZsi_renrakusaki_adress6,     /* 連絡先住所気付 【未使用】 */
+
+            :TMKZs_renrakusaki_adress_kana1 :TMKZsi_renrakusaki_adress_kana1,    /* 連絡先住所都道府県カナ */
+            :TMKZs_renrakusaki_adress_kana2 :TMKZsi_renrakusaki_adress_kana2,    /* 連絡先住所市区町村カナ */
+            :TMKZs_renrakusaki_adress_kana3 :TMKZsi_renrakusaki_adress_kana3,    /* 連絡先住所大字通称カナ */
+            :TMKZs_renrakusaki_adress_kana4 :TMKZsi_renrakusaki_adress_kana4,    /* 連絡先住所字丁目カナ */
+            :TMKZs_renrakusaki_adress_kana5 :TMKZsi_renrakusaki_adress_kana5,    /* 連絡先住所番地気付カナ */
+            :TMKZs_renrakusaki_adress_kana6 :TMKZsi_renrakusaki_adress_kana6,    /* 連絡先住所気付カナ 【未使用】*/
+
+            :TMKZs_renrakusaki_adress :TMKZsi_renrakusaki_adress,               /* 連絡先住所 */
+            :TMKZs_renrakusaki_adress_kana :TMKZsi_renrakusaki_adress_kana,     /* 連絡先住所カナ */
+
+            :TMKZs_data_date :TMKZsi_data_date,     /* データ基準日 */
+            :TMKZs_tax_free :TMKZsi_tax_free;       /* マル優 */
+
+        if( sqlca.sqlcode < 0 ){
+            send_err( m$sql_statment, sqlca.sqlcode, "FETCH cur_source", NULL, NULL, G_STATION );
+            exit_code = ERROR;
+            goto ENDPROC;
+        }
+
+        if( sqlca.sqlcode == ORA_NOF ){
+            if( update_commit_counter == 0 && update_counter == 0){
+                send_err ( m$message1,NORMAL,"未取引先データはありませんでした。",NULL,NULL,G_STATION);
+            }
+            break;
+        }
+
+        if (memcmp(target_suffix, "A",1) == 0) {
+            rc = insertKokyakuZokusaiA(g_szDtlMsg);
+        } else if (memcmp(target_suffix, "B",1) == 0) {
+            rc = insertKokyakuZokusaiB(g_szDtlMsg);
+        }
+        if ( rc != NORMAL ){
+            exit_code = ERROR;
+            goto ENDPROC;
+        }
+
+        /*------------------------------------*/
+        /* 更新数が一定数を超えるとコミット   */
+        /*-----------------------------*------*/
+        update_counter++;
+        if (update_counter>= COMMIT_COUNT) {
+            G_POSITION = __LINE__;
+            EXEC SQL COMMIT WORK;
+            if( sqlca.sqlcode < 0 ){
+                send_err( m$sql_statment, sqlca.sqlcode, "COMMIT", NULL, NULL, G_STATION );
+
+                exit_code = ERROR;
+                goto ENDPROC;
+            }
+
+            update_commit_counter = update_commit_counter + update_counter;
+            update_counter = 0;
+
+            /*------------------------------------*/
+            /* 処理件数をログ出力                 */
+            /*------------------------------------*/
+            sprintf(g_szDtlMsg, "%ldレコード 処理完了", update_commit_counter);
+            send_err(m$message1, 0, g_szDtlMsg, NULL, NULL, G_STATION);
+        }
+    }
+
+    /*--------------------------------------------------------------------------*/
+    /*                              終了処理                                    */
+    /*--------------------------------------------------------------------------*/
+
+ENDPROC:
+    if(flg_cur_open == 1){
+        EXEC SQL CLOSE cur_source;
+    }
+
+    /* ＤＢ切断 */
+    if( db_connect_flag == 1 ){
+        if ( exit_code == NORMAL ){
+            EXEC SQL COMMIT WORK RELEASE;
+            update_commit_counter = update_commit_counter + update_counter;
+        }
+        else{
+            EXEC SQL ROLLBACK WORK RELEASE;
+        }
+    }
+
+    /* 終了メッセージ出力 */
+    if ( exit_code == NORMAL ){
+
+        if (update_commit_counter > 0) {
+            sprintf(g_szDtlMsg, "%ld件の未取引先をTF_顧客属性%sに反映しました。", update_commit_counter, target_suffix);
+            send_err(m$message1, 0, g_szDtlMsg, NULL, NULL, G_STATION);
+        }
+        send_err( m$stop_process, NORMAL, process_name, "", "", G_STATION );
+    }
+    else {
+        send_err( m$abend_process, ERROR, process_name, "", "", G_STATION );
+    }
+
+    exit(exit_code);
+
+}
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   int checkFilles( RECV_FILE_DATA *pData,char *g_szDtlMsg )               */
+/*                                                                           */
+/* Description:                                                              */
+/*   ホスト変数クリア                                                            */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/*   None                                                                    */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   None                                                                    */
+/*                                                                           */
+/* Return Code:                                                              */
+/*   None                                                                    */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+void clearHostVariable( void )
+{
+
+    /* ----------------------------- */
+    /* TF_顧客属性のホスト変数初期化 */
+    /* ----------------------------- */
+    /* 店番 */
+    memset( TMKZs_tenban, 0x00, sizeof(TMKZs_tenban) );
+    TMKZsi_tenban=ORA_NULL;
+
+    /* CIFNO */
+    memset( TMKZs_cifno, 0x00, sizeof(TMKZs_cifno) );
+    TMKZsi_cifno=ORA_NULL;
+
+    /* 個人企業番号 */
+    memset( TMKZs_kojin_kigyo_no, 0x00, sizeof(TMKZs_kojin_kigyo_no) );
+    TMKZsi_kojin_kigyo_no=ORA_NULL;
+
+    /* 人格区分 */
+    memset( TMKZs_jinkaku_kbn, 0x00, sizeof(TMKZs_jinkaku_kbn) );
+    TMKZsi_jinkaku_kbn=ORA_NULL;
+
+    /* 世帯番号 */
+    memset( TMKZs_setai_no, 0x00, sizeof(TMKZs_setai_no) );
+    TMKZsi_setai_no=ORA_NULL;
+
+    /* 氏名漢字 */
+    memset( &TMKZs_name_knj, 0x00, sizeof(TMKZs_name_knj) );
+    TMKZs_name_knj.len = 0;
+    TMKZsi_name_knj=ORA_NULL;
+
+    /* 氏名漢字更新フラグ */
+    memset( TMKZs_name_knj_flg, 0x00, sizeof(TMKZs_name_knj_flg) );
+    TMKZsi_name_knj_flg=ORA_NULL;
+
+    /* 氏名カナ */
+    memset( &TMKZs_name_kna, 0x00, sizeof(TMKZs_name_kna) );
+    TMKZs_name_kna.len = 0;
+    TMKZsi_name_kna=ORA_NULL;
+
+    /* 氏名カナ更新フラグ */
+    memset( TMKZs_name_kna_flg, 0x00, sizeof(TMKZs_name_kna_flg) );
+    TMKZsi_name_kna_flg=ORA_NULL;
+
+    /* 性別 */
+    memset( TMKZs_sex, 0x00, sizeof(TMKZs_sex) );
+    TMKZsi_sex=ORA_NULL;
+
+    /* 性別更新フラグ */
+    memset( TMKZs_sex_flg, 0x00, sizeof(TMKZs_sex_flg) );
+    TMKZsi_sex_flg=ORA_NULL;
+
+    /* 生年月日 */
+    memset( TMKZs_birthday, 0x00, sizeof(TMKZs_birthday) );
+    TMKZsi_birthday=ORA_NULL;
+
+    /* 生年月日更新フラグ */
+    memset( TMKZs_birthday_flg, 0x00, sizeof(TMKZs_birthday_flg) );
+    TMKZsi_birthday_flg=ORA_NULL;
+
+    /* 住所コード */
+    memset( TMKZs_zip_cd, 0x00, sizeof(TMKZs_zip_cd) );
+    TMKZsi_zip_cd=ORA_NULL;
+
+    /* 郵便番号 */
+    memset( TMKZs_zip, 0x00, sizeof(TMKZs_zip) );
+    TMKZsi_zip=ORA_NULL;
+
+    /* 補助住所 */
+    memset( &TMKZs_hojo_jyusyo, 0x00, sizeof(TMKZs_hojo_jyusyo) );
+    TMKZs_hojo_jyusyo.len = 0;
+    TMKZsi_hojo_jyusyo=ORA_NULL;
+
+    /* 住所変更フラグ */
+    memset( TMKZs_addressflg, 0x00, sizeof(TMKZs_addressflg) );
+    TMKZsi_addressflg=ORA_NULL;
+
+    /* 補助住所カナ */
+    memset( &TMKZs_hojo_jyusyo_kana, 0x00, sizeof(TMKZs_hojo_jyusyo_kana) );
+    TMKZs_hojo_jyusyo_kana.len = 0;
+    TMKZsi_hojo_jyusyo_kana=ORA_NULL;
+
+    /* 住所カナ変更フラグ */
+    memset( TMKZs_address_kana_flg, 0x00, sizeof(TMKZs_address_kana_flg) );
+    TMKZsi_address_kana_flg=ORA_NULL;
+
+    /* 自宅電話番号 */
+    memset( TMKZs_jitakutel, 0x00, sizeof(TMKZs_jitakutel) );
+    TMKZsi_jitakutel=ORA_NULL;
+
+    /* 自宅電話番号更新フラグ */
+    memset( TMKZs_jitakutel_flg, 0x00, sizeof(TMKZs_jitakutel_flg) );
+    TMKZsi_jitakutel_flg=ORA_NULL;
+
+    /* 自宅FAX番号 */
+    memset( TMKZs_jitaku_fax, 0x00, sizeof(TMKZs_jitaku_fax) );
+    TMKZsi_jitaku_fax=ORA_NULL;
+
+    /* 自宅FAX番号更新フラグ */
+    memset( TMKZs_jitaku_fax_flg, 0x00, sizeof(TMKZs_jitaku_fax_flg) );
+    TMKZsi_jitaku_fax_flg=ORA_NULL;
+
+    /* 携帯電話番号 */
+    memset( TMKZs_keitai_tel, 0x00, sizeof(TMKZs_keitai_tel) );
+    TMKZsi_keitai_tel=ORA_NULL;
+
+    /* 携帯電話番号更新フラグ */
+    memset( TMKZs_keitai_tel_flg, 0x00, sizeof(TMKZs_keitai_tel_flg) );
+    TMKZsi_keitai_tel_flg=ORA_NULL;
+
+    /* MAILアドレス */
+    memset( &TMKZs_mail, 0x00, sizeof(TMKZs_mail) );
+    TMKZs_mail.len = 0;
+    TMKZsi_mail=ORA_NULL;
+
+    /* MAILアドレス更新フラグ */
+    memset( TMKZs_mail_flg, 0x00, sizeof(TMKZs_mail_flg) );
+    TMKZsi_mail_flg=ORA_NULL;
+
+    /* 勤務先名漢字 */
+    memset( &TMKZs_kinmusaki, 0x00, sizeof(TMKZs_kinmusaki) );
+    TMKZs_kinmusaki.len = 0;
+    TMKZsi_kinmusaki=ORA_NULL;
+
+    /* 勤務先名漢字更新フラグ */
+    memset( TMKZs_kinmusaki_flg, 0x00, sizeof(TMKZs_kinmusaki_flg) );
+    TMKZsi_kinmusaki_flg=ORA_NULL;
+
+    /* 勤務先名カナ */
+    memset( &TMKZs_kinmusaki_kana, 0x00, sizeof(TMKZs_kinmusaki_kana) );
+    TMKZs_kinmusaki_kana.len = 0;
+    TMKZsi_kinmusaki_kana=ORA_NULL;
+
+    /* 勤務先名カナ更新フラグ */
+    memset( TMKZs_kinmusaki_kana_flg, 0x00, sizeof(TMKZs_kinmusaki_kana_flg) );
+    TMKZsi_kinmusaki_kana_flg=ORA_NULL;
+
+    /* 勤務先電話番号 */
+    memset( TMKZs_kinmusaki_tel, 0x00, sizeof(TMKZs_kinmusaki_tel) );
+    TMKZsi_kinmusaki_tel=ORA_NULL;
+
+    /* 勤務先電話番号更新フラグ */
+    memset( TMKZs_kinmusaki_tel_flg, 0x00, sizeof(TMKZs_kinmusaki_tel_flg) );
+    TMKZsi_kinmusaki_tel_flg=ORA_NULL;
+
+    /* 連絡先住所コード */
+    memset( TMKZs_renrakusaki_zip_cd, 0x00, sizeof(TMKZs_renrakusaki_zip_cd) );
+    TMKZsi_renrakusaki_zip_cd=ORA_NULL;
+
+    /* 連絡先郵便番号 */
+    memset( TMKZs_renrakusaki_zip, 0x00, sizeof(TMKZs_renrakusaki_zip) );
+    TMKZsi_renrakusaki_zip=ORA_NULL;
+
+    /* 連絡先補助住所 */
+    memset( &TMKZs_renrakusaki_hojo_jyusyo, 0x00, sizeof(TMKZs_renrakusaki_hojo_jyusyo) );
+    TMKZs_renrakusaki_hojo_jyusyo.len = 0;
+    TMKZsi_renrakusaki_hojo_jyusyo=ORA_NULL;
+
+    /* 連絡先住所変更フラグ */
+    memset( TMKZs_renrakusaki_addressflg, 0x00, sizeof(TMKZs_renrakusaki_addressflg) );
+    TMKZsi_renrakusaki_addressflg=ORA_NULL;
+
+    /* 連絡先補助住所カナ */
+    memset( &TMKZs_renrakusaki_hojo_jyusyo_kana, 0x00, sizeof(TMKZs_renrakusaki_hojo_jyusyo_kana) );
+    TMKZs_renrakusaki_hojo_jyusyo_kana.len = 0;
+    TMKZsi_renrakusaki_hojo_jyusyo_kana=ORA_NULL;
+
+    /* 連絡先住所変更フラグ */
+    memset( TMKZs_renrakusaki_address_kana_flg, 0x00, sizeof(TMKZs_renrakusaki_address_kana_flg) );
+    TMKZsi_renrakusaki_address_kana_flg=ORA_NULL;
+
+    /* 連絡先電話番号 */
+    memset( TMKZs_renrakusaki_tel, 0x00, sizeof(TMKZs_renrakusaki_tel) );
+    TMKZsi_renrakusaki_tel=ORA_NULL;
+
+    /* 連絡先電話番号更新フラグ */
+    memset( TMKZs_renrakusaki_tel_flg, 0x00, sizeof(TMKZs_renrakusaki_tel_flg) );
+    TMKZsi_renrakusaki_tel_flg=ORA_NULL;
+
+    /* 連絡先FAX番号 */
+    memset( TMKZs_renrakusaki_fax, 0x00, sizeof(TMKZs_renrakusaki_fax) );
+    TMKZsi_renrakusaki_fax=ORA_NULL;
+
+    /* 連絡先FAX番号更新フラグ */
+    memset( TMKZs_renrakusaki_fax_flg, 0x00, sizeof(TMKZs_renrakusaki_fax_flg) );
+    TMKZsi_renrakusaki_fax_flg=ORA_NULL;
+
+    /* 日中連絡先電話番号 */
+    memset( TMKZs_nicchu_tel, 0x00, sizeof(TMKZs_nicchu_tel) );
+    TMKZsi_nicchu_tel=ORA_NULL;
+
+    /* 日中連絡先電話番号更新フラグ */
+    memset( TMKZs_nicchu_tel_flg, 0x00, sizeof(TMKZs_nicchu_tel_flg) );
+    TMKZsi_nicchu_tel_flg=ORA_NULL;
+
+    /* 取引開始日 */
+    memset( TMKZs_deal_day, 0x00, sizeof(TMKZs_deal_day) );
+    TMKZsi_deal_day=ORA_NULL;
+
+    /* 世帯主フラグ */
+    memset( TMKZs_setai_flg, 0x00, sizeof(TMKZs_setai_flg) );
+    TMKZsi_setai_flg=ORA_NULL;
+
+    /* 行員区分 */
+    memset( TMKZs_kouin_kbn, 0x00, sizeof(TMKZs_kouin_kbn) );
+    TMKZsi_kouin_kbn=ORA_NULL;
+
+    /* 郵便不着 */
+    memset( TMKZs_futyaku, 0x00, sizeof(TMKZs_futyaku) );
+    TMKZsi_futyaku=ORA_NULL;
+
+    /* 会社寮 */
+    memset( TMKZs_kaisya_ryo, 0x00, sizeof(TMKZs_kaisya_ryo) );
+    TMKZsi_kaisya_ryo=ORA_NULL;
+
+    /* 電話番号間違い */
+    memset( TMKZs_denwa_matigai, 0x00, sizeof(TMKZs_denwa_matigai) );
+    TMKZsi_denwa_matigai=ORA_NULL;
+
+    /* 移転 */
+    memset( TMKZs_iten, 0x00, sizeof(TMKZs_iten) );
+    TMKZsi_iten=ORA_NULL;
+
+    /* 本人死亡 */
+    memset( TMKZs_honnin_sibo, 0x00, sizeof(TMKZs_honnin_sibo) );
+    TMKZsi_honnin_sibo=ORA_NULL;
+
+    /* 案内区分 */
+    memset( TMKZs_annai_kbn, 0x00, sizeof(TMKZs_annai_kbn) );
+    TMKZsi_annai_kbn=ORA_NULL;
+
+    /* 優良区分 */
+    memset( TMKZs_yuryo_kbn, 0x00, sizeof(TMKZs_yuryo_kbn) );
+    TMKZsi_yuryo_kbn=ORA_NULL;
+
+    /* 未取引先 */
+    memset( TMKZs_mitorihikisaki, 0x00, sizeof(TMKZs_mitorihikisaki) );
+    TMKZsi_mitorihikisaki=ORA_NULL;
+
+    /* マル優申告額 */
+    memset( TMKZs_yu_shinkoku, 0x00, sizeof(TMKZs_yu_shinkoku) );
+    TMKZsi_yu_shinkoku=ORA_NULL;
+
+    /* マル優利用額 */
+    memset( TMKZs_yu_riyo, 0x00, sizeof(TMKZs_yu_riyo) );
+    TMKZsi_yu_riyo=ORA_NULL;
+
+    /* マル特申告額 */
+    memset( TMKZs_toku_shinkoku, 0x00, sizeof(TMKZs_toku_shinkoku) );
+    TMKZsi_toku_shinkoku=ORA_NULL;
+
+    /* マル特利用額 */
+    memset( TMKZs_toku_riyo, 0x00, sizeof(TMKZs_toku_riyo) );
+    TMKZsi_toku_riyo=ORA_NULL;
+
+    /* 当行金融資産残高 */
+    memset( TMKZs_zandaka, 0x00, sizeof(TMKZs_zandaka) );
+    TMKZsi_zandaka=ORA_NULL;
+
+    /* 預り資産残高１ */
+    memset( TMKZs_azukari_shisan1, 0x00, sizeof(TMKZs_azukari_shisan1) );
+    TMKZsi_azukari_shisan1=ORA_NULL;
+
+    /* 預り資産残高２ */
+    memset( TMKZs_azukari_shisan2, 0x00, sizeof(TMKZs_azukari_shisan2) );
+    TMKZsi_azukari_shisan2=ORA_NULL;
+
+    /* 預り資産残高３ */
+    memset( TMKZs_azukari_shisan3, 0x00, sizeof(TMKZs_azukari_shisan3) );
+    TMKZsi_azukari_shisan3=ORA_NULL;
+
+    /* 流動性預金残高 */
+    memset( TMKZs_ryudo_zandaka, 0x00, sizeof(TMKZs_ryudo_zandaka) );
+    TMKZsi_ryudo_zandaka=ORA_NULL;
+
+    /* 定期性預金残高 */
+    memset( TMKZs_teiki_zandaka, 0x00, sizeof(TMKZs_teiki_zandaka) );
+    TMKZsi_teiki_zandaka=ORA_NULL;
+
+    /* 仕組預金残高 */
+    memset( TMKZs_shikumi_zandaka, 0x00, sizeof(TMKZs_shikumi_zandaka) );
+    TMKZsi_shikumi_zandaka=ORA_NULL;
+
+    /* 外貨預金残高 */
+    memset( TMKZs_gaika_zandaka, 0x00, sizeof(TMKZs_gaika_zandaka) );
+    TMKZsi_gaika_zandaka=ORA_NULL;
+
+    /* 投信残高 */
+    memset( TMKZs_toushin_zandaka, 0x00, sizeof(TMKZs_toushin_zandaka) );
+    TMKZsi_toushin_zandaka=ORA_NULL;
+
+    /* 債券残高 */
+    memset( TMKZs_saiken_zandaka, 0x00, sizeof(TMKZs_saiken_zandaka) );
+    TMKZsi_saiken_zandaka=ORA_NULL;
+
+    /* リスク商品残高 */
+    memset( TMKZs_risk_zandaka, 0x00, sizeof(TMKZs_risk_zandaka) );
+    TMKZsi_risk_zandaka=ORA_NULL;
+
+    /* テレバン契約 */
+    memset( TMKZs_TB_contract, 0x00, sizeof(TMKZs_TB_contract) );
+    TMKZsi_TB_contract=ORA_NULL;
+
+    /* テレバン契約日 */
+    memset( TMKZs_TB_contract_day, 0x00, sizeof(TMKZs_TB_contract_day) );
+    TMKZsi_TB_contract_day=ORA_NULL;
+
+    /* IB契約 */
+    memset( TMKZs_IB_contract, 0x00, sizeof(TMKZs_IB_contract) );
+    TMKZsi_IB_contract=ORA_NULL;
+
+    /* IB契約者ID */
+    memset( TMKZs_IB_contract_id, 0x00, sizeof(TMKZs_IB_contract_id) );
+    TMKZsi_IB_contract_id=ORA_NULL;
+
+    /* IB契約申込店番 */
+    memset( TMKZs_IB_branch_id, 0x00, sizeof(TMKZs_IB_branch_id) );
+    TMKZsi_IB_branch_id=ORA_NULL;
+
+    /* IB契約代表口座科目 */
+    memset( TMKZs_IB_accnt_id, 0x00, sizeof(TMKZs_IB_accnt_id) );
+    TMKZsi_IB_accnt_id=ORA_NULL;
+
+    /* IB契約代表口座番号(旧 口番号) */
+    memset( TMKZs_IB_kuchi_no, 0x00, sizeof(TMKZs_IB_kuchi_no) );
+    TMKZsi_IB_kuchi_no=ORA_NULL;
+
+    /* IB契約日 */
+    memset( TMKZs_IB_contract_day, 0x00, sizeof(TMKZs_IB_contract_day) );
+    TMKZsi_IB_contract_day=ORA_NULL;
+
+    /* IB契約解除日 */
+    memset( TMKZs_IB_cancel_day, 0x00, sizeof(TMKZs_IB_cancel_day) );
+    TMKZsi_IB_cancel_day=ORA_NULL;
+
+    /* IB契約最終更新日 */
+    memset( TMKZs_IB_update_day, 0x00, sizeof(TMKZs_IB_update_day) );
+    TMKZsi_IB_update_day=ORA_NULL;
+
+    /* ネット支店契約 */
+    memset( TMKZs_net_contract, 0x00, sizeof(TMKZs_net_contract) );
+    TMKZsi_net_contract=ORA_NULL;
+
+    /* ネット支店契約者ID */
+    memset( TMKZs_net_contract_id, 0x00, sizeof(TMKZs_net_contract_id) );
+    TMKZsi_net_contract_id=ORA_NULL;
+
+    /* ネット支店契約申込店番 */
+    memset( TMKZs_net_branch_id, 0x00, sizeof(TMKZs_net_branch_id) );
+    TMKZsi_net_branch_id=ORA_NULL;
+
+    /* ネット支店契約代表口座科目 */
+    memset( TMKZs_net_accnt_id, 0x00, sizeof(TMKZs_net_accnt_id) );
+    TMKZsi_net_accnt_id=ORA_NULL;
+
+    /* ネット支店契約代表口座口番号 */
+    memset( TMKZs_net_kuchi_no, 0x00, sizeof(TMKZs_net_kuchi_no) );
+    TMKZsi_net_kuchi_no=ORA_NULL;
+
+    /* ネット支店契約日 */
+    memset( TMKZs_net_contract_day, 0x00, sizeof(TMKZs_net_contract_day) );
+    TMKZsi_net_contract_day=ORA_NULL;
+
+    /* ネット支店契約解除日 */
+    memset( TMKZs_net_cancel_day, 0x00, sizeof(TMKZs_net_cancel_day) );
+    TMKZsi_net_cancel_day=ORA_NULL;
+
+    /* ネット支店契約最終更新日 */
+    memset( TMKZs_net_update_day, 0x00, sizeof(TMKZs_net_update_day) );
+    TMKZsi_net_update_day=ORA_NULL;
+
+    /* ホストTM対象区分 */
+    memset( TMKZs_host_tm, 0x00, sizeof(TMKZs_host_tm) );
+    TMKZsi_host_tm=ORA_NULL;
+
+    /* ホストDM対象区分 */
+    memset( TMKZs_host_dm, 0x00, sizeof(TMKZs_host_dm) );
+    TMKZsi_host_dm=ORA_NULL;
+
+    /* TM対象区分 */
+    memset( TMKZs_tm, 0x00, sizeof(TMKZs_tm) );
+    TMKZsi_tm=ORA_NULL;
+
+    /* DM対象区分 */
+    memset( TMKZs_dm, 0x00, sizeof(TMKZs_dm) );
+    TMKZsi_dm=ORA_NULL;
+
+    /* 職業コード */
+    memset( TMKZs_occp_code, 0x00, sizeof(TMKZs_occp_code) );
+    TMKZsi_occp_code=ORA_NULL;
+
+    /* 年収 */
+    memset( TMKZs_income, 0x00, sizeof(TMKZs_income) );
+    TMKZsi_income=ORA_NULL;
+
+    /* 所得年度 */
+    memset( TMKZs_income_year, 0x00, sizeof(TMKZs_income_year) );
+    TMKZsi_income_year=ORA_NULL;
+
+    /* 取引管理情報 */
+    memset( TMKZs_torikan, 0x00, sizeof(TMKZs_torikan) );
+    TMKZsi_torikan=ORA_NULL;
+
+    /* 担当者名 */
+    memset( TMKZs_operate_name, 0x00, sizeof(TMKZs_operate_name) );
+    TMKZsi_operate_name=ORA_NULL;
+
+    /* カード発行サイン */
+    memset( TMKZs_card_sign, 0x00, sizeof(TMKZs_card_sign) );
+    TMKZsi_card_sign=ORA_NULL;
+
+    /* 自宅住所都道府県 */
+    memset( &TMKZs_adress1, 0x00, sizeof(TMKZs_adress1) );
+    TMKZs_adress1.len=0;
+    TMKZsi_adress1=ORA_NULL;
+
+    /* 自宅住所市区町村 */
+    memset( &TMKZs_adress2, 0x00, sizeof(TMKZs_adress2) );
+    TMKZs_adress2.len=0;
+    TMKZsi_adress2=ORA_NULL;
+
+    /* 自宅住所大字通称 */
+    memset( &TMKZs_adress3, 0x00, sizeof(TMKZs_adress3) );
+    TMKZs_adress3.len=0;
+    TMKZsi_adress3=ORA_NULL;
+
+    /* 自宅住所字丁目 */
+    memset( &TMKZs_adress4, 0x00, sizeof(TMKZs_adress4) );
+    TMKZs_adress4.len=0;
+    TMKZsi_adress4=ORA_NULL;
+
+    /* 自宅住所番地気付 */
+    memset( &TMKZs_adress5, 0x00, sizeof(TMKZs_adress5) );
+    TMKZs_adress5.len=0;
+    TMKZsi_adress5=ORA_NULL;
+
+    /* 自宅住所気付 【未使用】*/
+    memset( &TMKZs_adress6, 0x00, sizeof(TMKZs_adress6) );
+    TMKZs_adress6.len=0;
+    TMKZsi_adress6=ORA_NULL;
+
+    /* 自宅住所都道府県カナ */
+    memset( &TMKZs_adress_kana1, 0x00, sizeof(TMKZs_adress_kana1) );
+    TMKZs_adress_kana1.len=0;
+    TMKZsi_adress_kana1=ORA_NULL;
+
+    /* 自宅住所市区町村カナ */
+    memset( &TMKZs_adress_kana2, 0x00, sizeof(TMKZs_adress_kana2) );
+    TMKZs_adress_kana2.len=0;
+    TMKZsi_adress_kana2=ORA_NULL;
+
+    /* 自宅住所大字通称カナ */
+    memset( &TMKZs_adress_kana3, 0x00, sizeof(TMKZs_adress_kana3) );
+    TMKZs_adress_kana3.len=0;
+    TMKZsi_adress_kana3=ORA_NULL;
+
+    /* 自宅住所字丁目カナ */
+    memset( &TMKZs_adress_kana4, 0x00, sizeof(TMKZs_adress_kana4) );
+    TMKZs_adress_kana4.len=0;
+    TMKZsi_adress_kana4=ORA_NULL;
+
+    /* 自宅住所番地気付カナ */
+    memset( &TMKZs_adress_kana5, 0x00, sizeof(TMKZs_adress_kana5) );
+    TMKZs_adress_kana5.len=0;
+    TMKZsi_adress_kana5=ORA_NULL;
+
+    /* 自宅住所気付カナ【未使用】 */
+    memset( &TMKZs_adress_kana6, 0x00, sizeof(TMKZs_adress_kana6) );
+    TMKZs_adress_kana6.len=0;
+    TMKZsi_adress_kana6=ORA_NULL;
+
+    /* 自宅住所 */
+    memset( &TMKZs_adress, 0x00, sizeof(TMKZs_adress) );
+    TMKZs_adress.len = 0;
+    TMKZsi_adress=ORA_NULL;
+
+    /* 自宅住所カナ */
+    memset( &TMKZs_adress_kana, 0x00, sizeof(TMKZs_adress_kana) );
+    TMKZs_adress_kana.len = 0;
+    TMKZsi_adress_kana=ORA_NULL;
+
+    /* 連絡先住所都道府県 */
+    memset( &TMKZs_renrakusaki_adress1, 0x00, sizeof(TMKZs_renrakusaki_adress1) );
+    TMKZs_renrakusaki_adress1.len=0;
+    TMKZsi_renrakusaki_adress1=ORA_NULL;
+
+    /* 連絡先住所市区町村 */
+    memset( &TMKZs_renrakusaki_adress2, 0x00, sizeof(TMKZs_renrakusaki_adress2) );
+    TMKZs_renrakusaki_adress2.len=0;
+    TMKZsi_renrakusaki_adress2=ORA_NULL;
+
+    /* 連絡先住所大字通称 */
+    memset( &TMKZs_renrakusaki_adress3, 0x00, sizeof(TMKZs_renrakusaki_adress3) );
+    TMKZs_renrakusaki_adress3.len=0;
+    TMKZsi_renrakusaki_adress3=ORA_NULL;
+
+    /* 連絡先住所字丁目 */
+    memset( &TMKZs_renrakusaki_adress4, 0x00, sizeof(TMKZs_renrakusaki_adress4) );
+    TMKZs_renrakusaki_adress4.len=0;
+    TMKZsi_renrakusaki_adress4=ORA_NULL;
+
+    /* 連絡先住所番地気付 */
+    memset( &TMKZs_renrakusaki_adress5, 0x00, sizeof(TMKZs_renrakusaki_adress5) );
+    TMKZs_renrakusaki_adress5.len=0;
+    TMKZsi_renrakusaki_adress5=ORA_NULL;
+
+    /* 連絡先住所気付 【未使用】*/
+    memset( &TMKZs_renrakusaki_adress6, 0x00, sizeof(TMKZs_renrakusaki_adress6) );
+    TMKZs_renrakusaki_adress6.len=0;
+    TMKZsi_renrakusaki_adress6=ORA_NULL;
+
+    /* 連絡先住所都道府県カナ */
+    memset( &TMKZs_renrakusaki_adress_kana1, 0x00, sizeof(TMKZs_renrakusaki_adress_kana1) );
+    TMKZs_renrakusaki_adress_kana1.len=0;
+    TMKZsi_renrakusaki_adress_kana1=ORA_NULL;
+
+    /* 連絡先住所市区町村カナ */
+    memset( &TMKZs_renrakusaki_adress_kana2, 0x00, sizeof(TMKZs_renrakusaki_adress_kana2) );
+    TMKZs_renrakusaki_adress_kana2.len=0;
+    TMKZsi_renrakusaki_adress_kana2=ORA_NULL;
+
+    /* 連絡先住所大字通称カナ */
+    memset( &TMKZs_renrakusaki_adress_kana3, 0x00, sizeof(TMKZs_renrakusaki_adress_kana3) );
+    TMKZs_renrakusaki_adress_kana3.len=0;
+    TMKZsi_renrakusaki_adress_kana3=ORA_NULL;
+
+    /* 連絡先住所字丁目カナ */
+    memset( &TMKZs_renrakusaki_adress_kana4, 0x00, sizeof(TMKZs_renrakusaki_adress_kana4) );
+    TMKZs_renrakusaki_adress_kana4.len=0;
+    TMKZsi_renrakusaki_adress_kana4=ORA_NULL;
+
+    /* 連絡先住所番地気付カナ */
+    memset( &TMKZs_renrakusaki_adress_kana5, 0x00, sizeof(TMKZs_renrakusaki_adress_kana5) );
+    TMKZs_renrakusaki_adress_kana5.len=0;
+    TMKZsi_renrakusaki_adress_kana5=ORA_NULL;
+
+    /* 連絡先住所気付カナ【未使用】 */
+    memset( &TMKZs_renrakusaki_adress_kana6, 0x00, sizeof(TMKZs_renrakusaki_adress_kana6) );
+    TMKZs_renrakusaki_adress_kana6.len=0;
+    TMKZsi_renrakusaki_adress_kana6=ORA_NULL;
+
+    /* 連絡先住所 */
+    memset( &TMKZs_renrakusaki_adress, 0x00, sizeof(TMKZs_renrakusaki_adress) );
+    TMKZs_renrakusaki_adress.len = 0;
+    TMKZsi_renrakusaki_adress=ORA_NULL;
+
+    /* 連絡先住所カナ */
+    memset( &TMKZs_renrakusaki_adress_kana, 0x00, sizeof(TMKZs_renrakusaki_adress_kana) );
+    TMKZs_renrakusaki_adress_kana.len = 0;
+    TMKZsi_renrakusaki_adress_kana=ORA_NULL;
+
+    /* データ基準日 */
+    memset( TMKZs_data_date, 0x00, sizeof(TMKZs_data_date) );
+    TMKZsi_data_date=ORA_NULL;
+
+    /* マル優 */
+    memset( TMKZs_tax_free, 0x00, sizeof(TMKZs_tax_free) );
+    TMKZsi_tax_free=ORA_NULL;
+
+    return;
+}
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*          int insertTables( char *g_szDtlMsg )                             */
+/* Made by:                                                                  */
+/* Description : テーブルの登録                                              */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* g_szDtlMsg       char*        I/O  事象詳細文字列                         */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL       : 正常終了                                                */
+/*    ERROR        : 挿入エラー                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int insertKokyakuZokusaiA( char *g_szDtlMsg )
+{
+
+    /* ------------------------- */
+    /* TF_顧客属性Aの登録        */
+    /* ------------------------- */
+    G_POSITION = __LINE__;
+    EXEC SQL INSERT /*+ IGNORE_ROW_ON_DUPKEY_INDEX(TF_顧客属性A(CIFNO)) */ INTO TF_顧客属性A(
+          店番,
+          CIFNO,
+          個人企業番号,
+          人格区分,
+          世帯番号,
+          氏名漢字,
+          氏名漢字更新フラグ,
+          氏名カナ,
+          氏名カナ更新フラグ,
+          性別,
+          性別更新フラグ,
+          生年月日,
+          生年月日更新フラグ,
+          住所コード,
+          郵便番号,
+          補助住所,
+          住所変更フラグ,
+          補助住所カナ,
+          住所カナ変更フラグ,
+          自宅電話番号,
+          自宅電話番号更新フラグ,
+          自宅FAX番号,
+          自宅FAX番号更新フラグ,
+          携帯電話番号,
+          携帯電話番号更新フラグ,
+          MAILアドレス,
+          MAILアドレス更新フラグ,
+          勤務先名,
+          勤務先名更新フラグ,
+          勤務先名カナ,
+          勤務先名カナ更新フラグ,
+          勤務先電話番号,
+          勤務先電話番号更新フラグ,
+          連絡先住所コード,
+          連絡先郵便番号,
+          連絡先補助住所,
+          連絡先住所変更フラグ,
+          連絡先補助住所カナ,
+          連絡先住所カナ変更フラグ,
+          連絡先電話番号,
+          連絡先電話番号更新フラグ,
+          連絡先FAX番号,
+          連絡先FAX番号更新フラグ,
+          日中連絡先電話番号,
+          日中連絡先電話番号更新フラグ,
+          取引開始日,
+          世帯主フラグ,
+          行員区分,
+          郵便不着,
+          会社寮,
+          電話番号間違い,
+          移転,
+          本人死亡,
+          案内区分,
+          優良区分,
+          未取引先,
+          マル優申告額,
+          マル優利用額,
+          マル特申告額,
+          マル特利用額,
+          当行金融資産残高,
+          預り資産残高１,
+          預り資産残高２,
+          預り資産残高３,
+          流動性預金残高,
+          定期性預金残高,
+          仕組預金残高,
+          外貨預金残高,
+          投信残高,
+          債券残高,
+          リスク商品残高,
+          テレバン契約,
+          テレバン契約日,
+          IB契約,
+          IB契約者ID,
+          IB契約申込店番,
+          IB契約代表口座科目,
+          IB契約代表口座番号,
+          IB契約日,
+          IB契約解除日,
+          IB契約最終更新日,
+          ネット支店契約,
+          ネット支店契約者ID,
+          ネット支店契約申込店番,
+          ネット支店契約代表口座科目,
+          ネット支店契約代表口座口番号,
+          ネット支店契約日,
+          ネット支店契約解除日,
+          ネット支店契約最終更新日,
+          ホストTM対象区分,
+          ホストDM対象区分,
+          TM対象区分,
+          DM対象区分,
+          職業コード,
+          年収,
+          所得年度,
+          取引管理情報,
+          担当者名,
+          カード発行サイン,
+          自宅住所都道府県,
+          自宅住所市区町村,
+          自宅住所大字通称,
+          自宅住所字丁目,
+          自宅住所番地気付,
+          自宅住所気付,
+          自宅住所都道府県カナ,
+          自宅住所市区町村カナ,
+          自宅住所大字通称カナ,
+          自宅住所字丁目カナ,
+          自宅住所番地気付カナ,
+          自宅住所気付カナ,
+          自宅住所,
+          自宅住所カナ,
+          連絡先住所都道府県,
+          連絡先住所市区町村,
+          連絡先住所大字通称,
+          連絡先住所字丁目,
+          連絡先住所番地気付,
+          連絡先住所気付,
+          連絡先住所都道府県カナ,
+          連絡先住所市区町村カナ,
+          連絡先住所大字通称カナ,
+          連絡先住所字丁目カナ,
+          連絡先住所番地気付カナ,
+          連絡先住所気付カナ,
+          連絡先住所,
+          連絡先住所カナ,
+          データ基準日,
+          マル優
+           )
+        VALUES (
+            :TMKZs_tenban :TMKZsi_tenban,                   /* 店番 */
+            :TMKZs_cifno :TMKZsi_cifno,                     /* CIFNO */
+            :TMKZs_kojin_kigyo_no :TMKZsi_kojin_kigyo_no,   /* 個人企業番号 */
+            :TMKZs_jinkaku_kbn :TMKZsi_jinkaku_kbn,         /* 人格区分 */
+            :TMKZs_setai_no :TMKZsi_setai_no,               /* 世帯番号 */
+            :TMKZs_name_knj :TMKZsi_name_knj,               /* 氏名漢字 */
+            :TMKZs_name_knj_flg :TMKZsi_name_knj_flg,       /* 氏名漢字更新フラグ */
+            :TMKZs_name_kna :TMKZsi_name_kna,               /* 氏名カナ */
+            :TMKZs_name_kna_flg :TMKZsi_name_kna_flg,       /* 氏名カナ更新フラグ */
+            :TMKZs_sex :TMKZsi_sex,                         /* 性別 */
+            :TMKZs_sex_flg :TMKZsi_sex_flg,                 /* 性別更新フラグ */
+            :TMKZs_birthday :TMKZsi_birthday,               /* 生年月日 */
+            :TMKZs_birthday_flg :TMKZsi_birthday_flg,       /* 生年月日更新フラグ */
+            :TMKZs_zip_cd :TMKZsi_zip_cd,                   /* 住所コード */
+            :TMKZs_zip :TMKZsi_zip,                         /* 郵便番号 */
+            :TMKZs_hojo_jyusyo :TMKZsi_hojo_jyusyo,         /* 補助住所 */
+            :TMKZs_addressflg :TMKZsi_addressflg,               /* 住所変更フラグ */
+            :TMKZs_hojo_jyusyo_kana :TMKZsi_hojo_jyusyo_kana,   /* 補助住所カナ */
+            :TMKZs_address_kana_flg :TMKZsi_address_kana_flg,   /* 住所カナ変更フラグ */
+
+            :TMKZs_jitakutel :TMKZsi_jitakutel,             /* 自宅電話番号 */
+            :TMKZs_jitakutel_flg :TMKZsi_jitakutel_flg,     /* 自宅電話番号更新フラグ */
+            :TMKZs_jitaku_fax :TMKZsi_jitaku_fax,           /* 自宅FAX番号 */
+            :TMKZs_jitaku_fax_flg :TMKZsi_jitaku_fax_flg,   /* 自宅FAX番号更新フラグ */
+            :TMKZs_keitai_tel :TMKZsi_keitai_tel,           /* 携帯電話番号 */
+            :TMKZs_keitai_tel_flg :TMKZsi_keitai_tel_flg,   /* 携帯電話番号更新フラグ */
+
+            :TMKZs_mail :TMKZsi_mail,                       /* MAILアドレス */
+            :TMKZs_mail_flg :TMKZsi_mail_flg,               /* MAILアドレス更新フラグ */
+
+            :TMKZs_kinmusaki :TMKZsi_kinmusaki,                     /* 勤務先名漢字 */
+            :TMKZs_kinmusaki_flg :TMKZsi_kinmusaki_flg,             /* 勤務先名漢字更新フラグ */
+            :TMKZs_kinmusaki_kana :TMKZsi_kinmusaki_kana,           /* 勤務先名カナ */
+            :TMKZs_kinmusaki_kana_flg :TMKZsi_kinmusaki_kana_flg,   /* 勤務先名カナ更新フラグ */
+            :TMKZs_kinmusaki_tel :TMKZsi_kinmusaki_tel,             /* 勤務先電話番号 */
+            :TMKZs_kinmusaki_tel_flg :TMKZsi_kinmusaki_tel_flg,     /* 勤務先電話番号更新フラグ */
+
+            :TMKZs_renrakusaki_zip_cd :TMKZsi_renrakusaki_zip_cd,   /* 連絡先住所コード */
+            :TMKZs_renrakusaki_zip :TMKZsi_renrakusaki_zip,         /* 連絡先郵便番号 */
+            :TMKZs_renrakusaki_hojo_jyusyo :TMKZsi_renrakusaki_hojo_jyusyo,     /* 連絡先補助住所 */
+            :TMKZs_renrakusaki_addressflg :TMKZsi_renrakusaki_addressflg,       /* 連絡先住所変更フラグ */
+            :TMKZs_renrakusaki_hojo_jyusyo_kana  :TMKZsi_renrakusaki_hojo_jyusyo_kana,  /* 連絡先補助住所カナ */
+            :TMKZs_renrakusaki_address_kana_flg :TMKZsi_renrakusaki_address_kana_flg,   /* 連絡先住所カナ変更フラグ */
+            :TMKZs_renrakusaki_tel :TMKZsi_renrakusaki_tel,         /* 連絡先電話番号 */
+            :TMKZs_renrakusaki_tel_flg :TMKZsi_renrakusaki_tel_flg, /* 連絡先電話番号更新フラグ */
+            :TMKZs_renrakusaki_fax :TMKZsi_renrakusaki_fax,         /* 連絡先FAX番号 */
+            :TMKZs_renrakusaki_fax_flg :TMKZsi_renrakusaki_fax_flg, /* 連絡先FAX番号更新フラグ */
+
+            :TMKZs_nicchu_tel :TMKZsi_nicchu_tel,                   /* 日中連絡先電話番号 */
+            :TMKZs_nicchu_tel_flg :TMKZsi_nicchu_tel_flg,           /* 日中連絡先電話番号更新フラグ */
+
+            :TMKZs_deal_day :TMKZsi_deal_day,               /* 取引開始日 */
+
+            :TMKZs_setai_flg :TMKZsi_setai_flg,             /* 世帯主フラグ */
+            :TMKZs_kouin_kbn :TMKZsi_kouin_kbn,             /* 行員区分 */
+            :TMKZs_futyaku :TMKZsi_futyaku,                 /* 郵便不着 */
+            :TMKZs_kaisya_ryo :TMKZsi_kaisya_ryo,           /* 会社寮 */
+            :TMKZs_denwa_matigai :TMKZsi_denwa_matigai,     /* 電話番号間違い */
+            :TMKZs_iten :TMKZsi_iten,                       /* 移転 */
+            :TMKZs_honnin_sibo :TMKZsi_honnin_sibo,         /* 本人死亡 */
+            :TMKZs_annai_kbn :TMKZsi_annai_kbn,             /*  案内区分 */
+            :TMKZs_yuryo_kbn :TMKZsi_yuryo_kbn,             /*  優良区分 */
+            :TMKZs_mitorihikisaki :TMKZsi_mitorihikisaki,   /*  未取引先 */
+
+            :TMKZs_yu_shinkoku :TMKZsi_yu_shinkoku,         /* マル優申告額 */
+            :TMKZs_yu_riyo :TMKZsi_yu_riyo,                 /* マル優利用額 */
+            :TMKZs_toku_shinkoku :TMKZsi_toku_shinkoku,     /* マル特申告額 */
+            :TMKZs_toku_riyo :TMKZsi_toku_riyo,             /* マル特利用額 */
+
+            :TMKZs_zandaka :TMKZsi_zandaka,                 /* 当行金融資産残高 */
+            :TMKZs_azukari_shisan1 :TMKZsi_azukari_shisan1, /* 預り資産残高１ */
+            :TMKZs_azukari_shisan2 :TMKZsi_azukari_shisan2, /* 預り資産残高２ */
+            :TMKZs_azukari_shisan3 :TMKZsi_azukari_shisan3, /* 預り資産残高３ */
+            :TMKZs_ryudo_zandaka :TMKZsi_ryudo_zandaka,     /* 流動性預金残高 */
+            :TMKZs_teiki_zandaka :TMKZsi_teiki_zandaka,     /* 定期性預金残高 */
+            :TMKZs_shikumi_zandaka :TMKZsi_shikumi_zandaka, /* 仕組預金残高 */
+            :TMKZs_gaika_zandaka :TMKZsi_gaika_zandaka,     /* 外貨預金残高 */
+            :TMKZs_toushin_zandaka :TMKZsi_toushin_zandaka, /* 投信残高 */
+            :TMKZs_saiken_zandaka :TMKZsi_saiken_zandaka,   /* 債券残高 */
+            :TMKZs_risk_zandaka :TMKZsi_risk_zandaka,       /* リスク商品残高 */
+
+            :TMKZs_TB_contract :TMKZsi_TB_contract,         /* テレバン契約 */
+            :TMKZs_TB_contract_day :TMKZsi_TB_contract_day, /* テレバン契約日 */
+
+            :TMKZs_IB_contract :TMKZsi_IB_contract,         /* IB契約 */
+            :TMKZs_IB_contract_id :TMKZsi_IB_contract_id,   /* IB契約者ID */
+            :TMKZs_IB_branch_id :TMKZsi_IB_branch_id,       /* IB契約申込店番 */
+            :TMKZs_IB_accnt_id :TMKZsi_IB_accnt_id,         /* IB契約代表口座科目 */
+            :TMKZs_IB_kuchi_no :TMKZsi_IB_kuchi_no,         /* IB契約代表口座番号 */
+            :TMKZs_IB_contract_day :TMKZsi_IB_contract_day, /* IB契約日 */
+            :TMKZs_IB_cancel_day :TMKZsi_IB_cancel_day,     /* IB契約解約日 */
+            :TMKZs_IB_update_day :TMKZsi_IB_update_day,     /* IB契約最終更新日 */
+
+            :TMKZs_net_contract :TMKZsi_net_contract,       /* ネット支店契約 */
+            :TMKZs_net_contract_id :TMKZsi_net_contract_id, /* ネット支店契約者ID */
+            :TMKZs_net_branch_id :TMKZsi_net_branch_id,     /* ネット支店契約申込店番 */
+            :TMKZs_net_accnt_id :TMKZsi_net_accnt_id,       /* ネット支店契約代表口座科目 */
+            :TMKZs_net_kuchi_no :TMKZsi_net_kuchi_no,       /* ネット支店契約代表口座口番号 */
+            :TMKZs_net_contract_day :TMKZsi_net_contract_day,    /* ネット支店契約日 */
+            :TMKZs_net_cancel_day :TMKZsi_net_cancel_day,   /* ネット支店契約解約日 */
+            :TMKZs_net_update_day :TMKZsi_net_update_day,   /* ネット支店契約最終更新日 */
+
+            :TMKZs_host_tm :TMKZsi_host_tm,                 /* ホストTM対象区分 */
+            :TMKZs_host_dm :TMKZsi_host_dm,                 /* ホストDM対象区分 */
+            :TMKZs_tm :TMKZsi_tm,                           /* TM対象区分 */
+            :TMKZs_dm :TMKZsi_dm,                           /* DM対象区分 */
+
+            :TMKZs_occp_code :TMKZsi_occp_code,             /* 職業コード */
+            :TMKZs_income :TMKZsi_income,                   /* 年収 */
+            :TMKZs_income_year :TMKZsi_income_year,         /* 所得年度 */
+            :TMKZs_torikan :TMKZsi_torikan,                 /* 取引管理情報 */
+            :TMKZs_operate_name :TMKZsi_operate_name,       /* 担当者名 */
+            :TMKZs_card_sign :TMKZsi_card_sign,             /* カード発行サイン */
+
+            :TMKZs_adress1 :TMKZsi_adress1,                 /* 自宅住所都道府県 */
+            :TMKZs_adress2 :TMKZsi_adress2,                 /* 自宅住所市区町村 */
+            :TMKZs_adress3 :TMKZsi_adress3,                 /* 自宅住所大字通称 */
+            :TMKZs_adress4 :TMKZsi_adress4,                 /* 自宅住所字丁目 */
+            :TMKZs_adress5 :TMKZsi_adress5,                 /* 自宅住所番地気付 */
+            :TMKZs_adress6 :TMKZsi_adress6,                 /* 自宅住所気付 【未使用】*/
+
+            :TMKZs_adress_kana1 :TMKZsi_adress_kana1,       /* 自宅住所都道府県カナ */
+            :TMKZs_adress_kana2  :TMKZsi_adress_kana2,      /* 自宅住所市区町村カナ */
+            :TMKZs_adress_kana3 :TMKZsi_adress_kana3,       /* 自宅住所大字通称カナ */
+            :TMKZs_adress_kana4 :TMKZsi_adress_kana4,       /* 自宅住所字丁目カナ */
+            :TMKZs_adress_kana5 :TMKZsi_adress_kana5,       /* 自宅住所番地気付カナ */
+            :TMKZs_adress_kana6 :TMKZsi_adress_kana6,       /* 自宅住所気付カナ 【未使用】*/
+
+            :TMKZs_adress :TMKZsi_adress,                   /* 自宅住所 */
+            :TMKZs_adress_kana :TMKZsi_adress_kana,         /* 自宅住所カナ */
+
+            :TMKZs_renrakusaki_adress1 :TMKZsi_renrakusaki_adress1,     /* 連絡先住所都道府県 */
+            :TMKZs_renrakusaki_adress2 :TMKZsi_renrakusaki_adress2,     /* 連絡先住所市区町村 */
+            :TMKZs_renrakusaki_adress3 :TMKZsi_renrakusaki_adress3,     /* 連絡先住所大字通称 */
+            :TMKZs_renrakusaki_adress4 :TMKZsi_renrakusaki_adress4,     /* 連絡先住所字丁目 */
+            :TMKZs_renrakusaki_adress5 :TMKZsi_renrakusaki_adress5,     /* 連絡先住所番地気付 */
+            :TMKZs_renrakusaki_adress6 :TMKZsi_renrakusaki_adress6,     /* 連絡先住所気付 【未使用】 */
+
+            :TMKZs_renrakusaki_adress_kana1 :TMKZsi_renrakusaki_adress_kana1,   /* 連絡先住所都道府県カナ */
+            :TMKZs_renrakusaki_adress_kana2 :TMKZsi_renrakusaki_adress_kana2,   /* 連絡先住所市区町村カナ */
+            :TMKZs_renrakusaki_adress_kana3 :TMKZsi_renrakusaki_adress_kana3,   /* 連絡先住所大字通称カナ */
+            :TMKZs_renrakusaki_adress_kana4 :TMKZsi_renrakusaki_adress_kana4,   /* 連絡先住所字丁目カナ */
+            :TMKZs_renrakusaki_adress_kana5 :TMKZsi_renrakusaki_adress_kana5,   /* 連絡先住所番地気付カナ */
+            :TMKZs_renrakusaki_adress_kana6 :TMKZsi_renrakusaki_adress_kana6,   /* 連絡先住所気付カナ 【未使用】*/
+
+            :TMKZs_renrakusaki_adress :TMKZsi_renrakusaki_adress,               /* 連絡先住所 */
+            :TMKZs_renrakusaki_adress_kana :TMKZsi_renrakusaki_adress_kana,     /* 連絡先住所カナ */
+
+            :TMKZs_data_date :TMKZsi_data_date,     /* データ基準日 */
+            :TMKZs_tax_free :TMKZsi_tax_free        /* マル優 */
+       );
+
+
+    /* エラーチェック */
+    if (sqlca.sqlcode != 0){
+        sprintf( g_szDtlMsg,
+                 "TF_顧客属性Aの登録に失敗しました。(sqlca.sqlcode=%d)",
+                 sqlca.sqlcode );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "INSERT TF_顧客属性A", NULL, NULL, G_STATION);
+        return ERROR;
+    }
+
+    return NORMAL;
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*          int insertTables( char *g_szDtlMsg )                             */
+/* Made by:                                                                  */
+/* Description : テーブルの登録                                              */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* g_szDtlMsg       char*        I/O  事象詳細文字列                         */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL       : 正常終了                                                */
+/*    ERROR        : 挿入エラー                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int insertKokyakuZokusaiB( char *g_szDtlMsg )
+{
+
+    /* ------------------------- */
+    /* TF_顧客属性Aの登録 */
+    /* ------------------------- */
+    G_POSITION = __LINE__;
+    EXEC SQL INSERT /*+ IGNORE_ROW_ON_DUPKEY_INDEX(TF_顧客属性B(CIFNO)) */ INTO TF_顧客属性B (
+          店番,
+          CIFNO,
+          個人企業番号,
+          人格区分,
+          世帯番号,
+          氏名漢字,
+          氏名漢字更新フラグ,
+          氏名カナ,
+          氏名カナ更新フラグ,
+          性別,
+          性別更新フラグ,
+          生年月日,
+          生年月日更新フラグ,
+          住所コード,
+          郵便番号,
+          補助住所,
+          住所変更フラグ,
+          補助住所カナ,
+          住所カナ変更フラグ,
+          自宅電話番号,
+          自宅電話番号更新フラグ,
+          自宅FAX番号,
+          自宅FAX番号更新フラグ,
+          携帯電話番号,
+          携帯電話番号更新フラグ,
+          MAILアドレス,
+          MAILアドレス更新フラグ,
+          勤務先名,
+          勤務先名更新フラグ,
+          勤務先名カナ,
+          勤務先名カナ更新フラグ,
+          勤務先電話番号,
+          勤務先電話番号更新フラグ,
+          連絡先住所コード,
+          連絡先郵便番号,
+          連絡先補助住所,
+          連絡先住所変更フラグ,
+          連絡先補助住所カナ,
+          連絡先住所カナ変更フラグ,
+          連絡先電話番号,
+          連絡先電話番号更新フラグ,
+          連絡先FAX番号,
+          連絡先FAX番号更新フラグ,
+          日中連絡先電話番号,
+          日中連絡先電話番号更新フラグ,
+          取引開始日,
+          世帯主フラグ,
+          行員区分,
+          郵便不着,
+          会社寮,
+          電話番号間違い,
+          移転,
+          本人死亡,
+          案内区分,
+          優良区分,
+          未取引先,
+          マル優申告額,
+          マル優利用額,
+          マル特申告額,
+          マル特利用額,
+          当行金融資産残高,
+          預り資産残高１,
+          預り資産残高２,
+          預り資産残高３,
+          流動性預金残高,
+          定期性預金残高,
+          仕組預金残高,
+          外貨預金残高,
+          投信残高,
+          債券残高,
+          リスク商品残高,
+          テレバン契約,
+          テレバン契約日,
+          IB契約,
+          IB契約者ID,
+          IB契約申込店番,
+          IB契約代表口座科目,
+          IB契約代表口座番号,
+          IB契約日,
+          IB契約解除日,
+          IB契約最終更新日,
+          ネット支店契約,
+          ネット支店契約者ID,
+          ネット支店契約申込店番,
+          ネット支店契約代表口座科目,
+          ネット支店契約代表口座口番号,
+          ネット支店契約日,
+          ネット支店契約解除日,
+          ネット支店契約最終更新日,
+          ホストTM対象区分,
+          ホストDM対象区分,
+          TM対象区分,
+          DM対象区分,
+          職業コード,
+          年収,
+          所得年度,
+          取引管理情報,
+          担当者名,
+          カード発行サイン,
+          自宅住所都道府県,
+          自宅住所市区町村,
+          自宅住所大字通称,
+          自宅住所字丁目,
+          自宅住所番地気付,
+          自宅住所気付,
+          自宅住所都道府県カナ,
+          自宅住所市区町村カナ,
+          自宅住所大字通称カナ,
+          自宅住所字丁目カナ,
+          自宅住所番地気付カナ,
+          自宅住所気付カナ,
+          自宅住所,
+          自宅住所カナ,
+          連絡先住所都道府県,
+          連絡先住所市区町村,
+          連絡先住所大字通称,
+          連絡先住所字丁目,
+          連絡先住所番地気付,
+          連絡先住所気付,
+          連絡先住所都道府県カナ,
+          連絡先住所市区町村カナ,
+          連絡先住所大字通称カナ,
+          連絡先住所字丁目カナ,
+          連絡先住所番地気付カナ,
+          連絡先住所気付カナ,
+          連絡先住所,
+          連絡先住所カナ,
+          データ基準日,
+          マル優
+           )
+        VALUES (
+            :TMKZs_tenban :TMKZsi_tenban,                   /* 店番 */
+            :TMKZs_cifno :TMKZsi_cifno,                     /* CIFNO */
+            :TMKZs_kojin_kigyo_no :TMKZsi_kojin_kigyo_no,   /* 個人企業番号 */
+            :TMKZs_jinkaku_kbn :TMKZsi_jinkaku_kbn,         /* 人格区分 */
+            :TMKZs_setai_no :TMKZsi_setai_no,               /* 世帯番号 */
+            :TMKZs_name_knj :TMKZsi_name_knj,               /* 氏名漢字 */
+            :TMKZs_name_knj_flg :TMKZsi_name_knj_flg,       /* 氏名漢字更新フラグ */
+            :TMKZs_name_kna :TMKZsi_name_kna,               /* 氏名カナ */
+            :TMKZs_name_kna_flg :TMKZsi_name_kna_flg,       /* 氏名カナ更新フラグ */
+            :TMKZs_sex :TMKZsi_sex,                         /* 性別 */
+            :TMKZs_sex_flg :TMKZsi_sex_flg,                 /* 性別更新フラグ */
+            :TMKZs_birthday :TMKZsi_birthday,               /* 生年月日 */
+            :TMKZs_birthday_flg :TMKZsi_birthday_flg,       /* 生年月日更新フラグ */
+            :TMKZs_zip_cd :TMKZsi_zip_cd,                   /* 住所コード */
+            :TMKZs_zip :TMKZsi_zip,                         /* 郵便番号 */
+            :TMKZs_hojo_jyusyo :TMKZsi_hojo_jyusyo,         /* 補助住所 */
+            :TMKZs_addressflg :TMKZsi_addressflg,               /* 住所変更フラグ */
+            :TMKZs_hojo_jyusyo_kana :TMKZsi_hojo_jyusyo_kana,   /* 補助住所カナ */
+            :TMKZs_address_kana_flg :TMKZsi_address_kana_flg,   /* 住所カナ変更フラグ */
+
+            :TMKZs_jitakutel :TMKZsi_jitakutel,             /* 自宅電話番号 */
+            :TMKZs_jitakutel_flg :TMKZsi_jitakutel_flg,     /* 自宅電話番号更新フラグ */
+            :TMKZs_jitaku_fax :TMKZsi_jitaku_fax,           /* 自宅FAX番号 */
+            :TMKZs_jitaku_fax_flg :TMKZsi_jitaku_fax_flg,   /* 自宅FAX番号更新フラグ */
+            :TMKZs_keitai_tel :TMKZsi_keitai_tel,           /* 携帯電話番号 */
+            :TMKZs_keitai_tel_flg :TMKZsi_keitai_tel_flg,   /* 携帯電話番号更新フラグ */
+
+            :TMKZs_mail :TMKZsi_mail,                       /* MAILアドレス */
+            :TMKZs_mail_flg :TMKZsi_mail_flg,               /* MAILアドレス更新フラグ */
+
+            :TMKZs_kinmusaki :TMKZsi_kinmusaki,                     /* 勤務先名漢字 */
+            :TMKZs_kinmusaki_flg :TMKZsi_kinmusaki_flg,             /* 勤務先名漢字更新フラグ */
+            :TMKZs_kinmusaki_kana :TMKZsi_kinmusaki_kana,           /* 勤務先名カナ */
+            :TMKZs_kinmusaki_kana_flg :TMKZsi_kinmusaki_kana_flg,   /* 勤務先名カナ更新フラグ */
+            :TMKZs_kinmusaki_tel :TMKZsi_kinmusaki_tel,             /* 勤務先電話番号 */
+            :TMKZs_kinmusaki_tel_flg :TMKZsi_kinmusaki_tel_flg,     /* 勤務先電話番号更新フラグ */
+
+            :TMKZs_renrakusaki_zip_cd :TMKZsi_renrakusaki_zip_cd,   /* 連絡先住所コード */
+            :TMKZs_renrakusaki_zip :TMKZsi_renrakusaki_zip,         /* 連絡先郵便番号 */
+            :TMKZs_renrakusaki_hojo_jyusyo :TMKZsi_renrakusaki_hojo_jyusyo,     /* 連絡先補助住所 */
+            :TMKZs_renrakusaki_addressflg :TMKZsi_renrakusaki_addressflg,       /* 連絡先住所変更フラグ */
+            :TMKZs_renrakusaki_hojo_jyusyo_kana  :TMKZsi_renrakusaki_hojo_jyusyo_kana,  /* 連絡先補助住所カナ */
+            :TMKZs_renrakusaki_address_kana_flg :TMKZsi_renrakusaki_address_kana_flg,   /* 連絡先住所カナ変更フラグ */
+            :TMKZs_renrakusaki_tel :TMKZsi_renrakusaki_tel,         /* 連絡先電話番号 */
+            :TMKZs_renrakusaki_tel_flg :TMKZsi_renrakusaki_tel_flg, /* 連絡先電話番号更新フラグ */
+            :TMKZs_renrakusaki_fax :TMKZsi_renrakusaki_fax,         /* 連絡先FAX番号 */
+            :TMKZs_renrakusaki_fax_flg :TMKZsi_renrakusaki_fax_flg, /* 連絡先FAX番号更新フラグ */
+
+            :TMKZs_nicchu_tel :TMKZsi_nicchu_tel,                   /* 日中連絡先電話番号 */
+            :TMKZs_nicchu_tel_flg :TMKZsi_nicchu_tel_flg,           /* 日中連絡先電話番号更新フラグ */
+
+            :TMKZs_deal_day :TMKZsi_deal_day,               /* 取引開始日 */
+
+            :TMKZs_setai_flg :TMKZsi_setai_flg,             /* 世帯主フラグ */
+            :TMKZs_kouin_kbn :TMKZsi_kouin_kbn,             /* 行員区分 */
+            :TMKZs_futyaku :TMKZsi_futyaku,                 /* 郵便不着 */
+            :TMKZs_kaisya_ryo :TMKZsi_kaisya_ryo,           /* 会社寮 */
+            :TMKZs_denwa_matigai :TMKZsi_denwa_matigai,     /* 電話番号間違い */
+            :TMKZs_iten :TMKZsi_iten,                       /* 移転 */
+            :TMKZs_honnin_sibo :TMKZsi_honnin_sibo,         /* 本人死亡 */
+            :TMKZs_annai_kbn :TMKZsi_annai_kbn,             /*  案内区分 */
+            :TMKZs_yuryo_kbn :TMKZsi_yuryo_kbn,             /*  優良区分 */
+            :TMKZs_mitorihikisaki :TMKZsi_mitorihikisaki,   /*  未取引先 */
+
+            :TMKZs_yu_shinkoku :TMKZsi_yu_shinkoku,         /* マル優申告額 */
+            :TMKZs_yu_riyo :TMKZsi_yu_riyo,                 /* マル優利用額 */
+            :TMKZs_toku_shinkoku :TMKZsi_toku_shinkoku,     /* マル特申告額 */
+            :TMKZs_toku_riyo :TMKZsi_toku_riyo,             /* マル特利用額 */
+
+            :TMKZs_zandaka :TMKZsi_zandaka,                 /* 当行金融資産残高 */
+            :TMKZs_azukari_shisan1 :TMKZsi_azukari_shisan1, /* 預り資産残高１ */
+            :TMKZs_azukari_shisan2 :TMKZsi_azukari_shisan2, /* 預り資産残高２ */
+            :TMKZs_azukari_shisan3 :TMKZsi_azukari_shisan3, /* 預り資産残高３ */
+            :TMKZs_ryudo_zandaka :TMKZsi_ryudo_zandaka,     /* 流動性預金残高 */
+            :TMKZs_teiki_zandaka :TMKZsi_teiki_zandaka,     /* 定期性預金残高 */
+            :TMKZs_shikumi_zandaka :TMKZsi_shikumi_zandaka, /* 仕組預金残高 */
+            :TMKZs_gaika_zandaka :TMKZsi_gaika_zandaka,     /* 外貨預金残高 */
+            :TMKZs_toushin_zandaka :TMKZsi_toushin_zandaka, /* 投信残高 */
+            :TMKZs_saiken_zandaka :TMKZsi_saiken_zandaka,   /* 債券残高 */
+            :TMKZs_risk_zandaka :TMKZsi_risk_zandaka,       /* リスク商品残高 */
+
+            :TMKZs_TB_contract :TMKZsi_TB_contract,         /* テレバン契約 */
+            :TMKZs_TB_contract_day :TMKZsi_TB_contract_day, /* テレバン契約日 */
+
+            :TMKZs_IB_contract :TMKZsi_IB_contract,         /* IB契約 */
+            :TMKZs_IB_contract_id :TMKZsi_IB_contract_id,   /* IB契約者ID */
+            :TMKZs_IB_branch_id :TMKZsi_IB_branch_id,       /* IB契約申込店番 */
+            :TMKZs_IB_accnt_id :TMKZsi_IB_accnt_id,         /* IB契約代表口座科目 */
+            :TMKZs_IB_kuchi_no :TMKZsi_IB_kuchi_no,         /* IB契約代表口座番号 */
+            :TMKZs_IB_contract_day :TMKZsi_IB_contract_day, /* IB契約日 */
+            :TMKZs_IB_cancel_day :TMKZsi_IB_cancel_day,     /* IB契約解約日 */
+            :TMKZs_IB_update_day :TMKZsi_IB_update_day,     /* IB契約最終更新日 */
+
+            :TMKZs_net_contract :TMKZsi_net_contract,       /* ネット支店契約 */
+            :TMKZs_net_contract_id :TMKZsi_net_contract_id, /* ネット支店契約者ID */
+            :TMKZs_net_branch_id :TMKZsi_net_branch_id,     /* ネット支店契約申込店番 */
+            :TMKZs_net_accnt_id :TMKZsi_net_accnt_id,       /* ネット支店契約代表口座科目 */
+            :TMKZs_net_kuchi_no :TMKZsi_net_kuchi_no,       /* ネット支店契約代表口座口番号 */
+            :TMKZs_net_contract_day :TMKZsi_net_contract_day,    /* ネット支店契約日 */
+            :TMKZs_net_cancel_day :TMKZsi_net_cancel_day,   /* ネット支店契約解約日 */
+            :TMKZs_net_update_day :TMKZsi_net_update_day,   /* ネット支店契約最終更新日 */
+
+            :TMKZs_host_tm :TMKZsi_host_tm,                 /* ホストTM対象区分 */
+            :TMKZs_host_dm :TMKZsi_host_dm,                 /* ホストDM対象区分 */
+            :TMKZs_tm :TMKZsi_tm,                           /* TM対象区分 */
+            :TMKZs_dm :TMKZsi_dm,                           /* DM対象区分 */
+
+            :TMKZs_occp_code :TMKZsi_occp_code,             /* 職業コード */
+            :TMKZs_income :TMKZsi_income,                   /* 年収 */
+            :TMKZs_income_year :TMKZsi_income_year,         /* 所得年度 */
+            :TMKZs_torikan :TMKZsi_torikan,                 /* 取引管理情報 */
+            :TMKZs_operate_name :TMKZsi_operate_name,       /* 担当者名 */
+            :TMKZs_card_sign :TMKZsi_card_sign,             /* カード発行サイン */
+
+            :TMKZs_adress1 :TMKZsi_adress1,                 /* 自宅住所都道府県 */
+            :TMKZs_adress2 :TMKZsi_adress2,                 /* 自宅住所市区町村 */
+            :TMKZs_adress3 :TMKZsi_adress3,                 /* 自宅住所大字通称 */
+            :TMKZs_adress4 :TMKZsi_adress4,                 /* 自宅住所字丁目 */
+            :TMKZs_adress5 :TMKZsi_adress5,                 /* 自宅住所番地気付 */
+            :TMKZs_adress6 :TMKZsi_adress6,                 /* 自宅住所気付 【未使用】*/
+
+            :TMKZs_adress_kana1 :TMKZsi_adress_kana1,       /* 自宅住所都道府県カナ */
+            :TMKZs_adress_kana2  :TMKZsi_adress_kana2,      /* 自宅住所市区町村カナ */
+            :TMKZs_adress_kana3 :TMKZsi_adress_kana3,       /* 自宅住所大字通称カナ */
+            :TMKZs_adress_kana4 :TMKZsi_adress_kana4,       /* 自宅住所字丁目カナ */
+            :TMKZs_adress_kana5 :TMKZsi_adress_kana5,       /* 自宅住所番地気付カナ */
+            :TMKZs_adress_kana6 :TMKZsi_adress_kana6,       /* 自宅住所気付カナ 【未使用】*/
+
+            :TMKZs_adress :TMKZsi_adress,                   /* 自宅住所 */
+            :TMKZs_adress_kana :TMKZsi_adress_kana,         /* 自宅住所カナ */
+
+            :TMKZs_renrakusaki_adress1 :TMKZsi_renrakusaki_adress1,     /* 連絡先住所都道府県 */
+            :TMKZs_renrakusaki_adress2 :TMKZsi_renrakusaki_adress2,     /* 連絡先住所市区町村 */
+            :TMKZs_renrakusaki_adress3 :TMKZsi_renrakusaki_adress3,     /* 連絡先住所大字通称 */
+            :TMKZs_renrakusaki_adress4 :TMKZsi_renrakusaki_adress4,     /* 連絡先住所字丁目 */
+            :TMKZs_renrakusaki_adress5 :TMKZsi_renrakusaki_adress5,     /* 連絡先住所番地気付 */
+            :TMKZs_renrakusaki_adress6 :TMKZsi_renrakusaki_adress6,     /* 連絡先住所気付 【未使用】 */
+
+            :TMKZs_renrakusaki_adress_kana1 :TMKZsi_renrakusaki_adress_kana1,   /* 連絡先住所都道府県カナ */
+            :TMKZs_renrakusaki_adress_kana2 :TMKZsi_renrakusaki_adress_kana2,   /* 連絡先住所市区町村カナ */
+            :TMKZs_renrakusaki_adress_kana3 :TMKZsi_renrakusaki_adress_kana3,   /* 連絡先住所大字通称カナ */
+            :TMKZs_renrakusaki_adress_kana4 :TMKZsi_renrakusaki_adress_kana4,   /* 連絡先住所字丁目カナ */
+            :TMKZs_renrakusaki_adress_kana5 :TMKZsi_renrakusaki_adress_kana5,   /* 連絡先住所番地気付カナ */
+            :TMKZs_renrakusaki_adress_kana6 :TMKZsi_renrakusaki_adress_kana6,   /* 連絡先住所気付カナ 【未使用】*/
+
+            :TMKZs_renrakusaki_adress :TMKZsi_renrakusaki_adress,               /* 連絡先住所 */
+            :TMKZs_renrakusaki_adress_kana :TMKZsi_renrakusaki_adress_kana,     /* 連絡先住所カナ */
+
+            :TMKZs_data_date :TMKZsi_data_date,     /* データ基準日 */
+            :TMKZs_tax_free :TMKZsi_tax_free        /* マル優 */
+       );
+
+
+    /* エラーチェック */
+    if (sqlca.sqlcode != 0){
+        sprintf( g_szDtlMsg,
+                 "TF_顧客属性Bの登録に失敗しました。(sqlca.sqlcode=%d)",
+                 sqlca.sqlcode );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "INSERT TF_顧客属性B", NULL, NULL, G_STATION);
+        return ERROR;
+    }
+
+    return NORMAL;
+}
+/*==========================================================================*/
+/* End of File                                                  　          */
+/*==========================================================================*/
