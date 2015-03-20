@@ -203,10 +203,11 @@ $global:SQL_VIEW_FOREIGN_BASE="view_tf_05"
 $global:SQL_VIEW_FUND_BASE="view_tf_07"
 $global:SQL_VIEW_FUND_DETAIL_BASE="view_tf_08"
 $global:SQL_VIEW_PRODUCT_BASE="view_tf_10"
-$global:SQL_VIEW_CUSTOMER_BASE="view_tf_01"  # TF_顧客属性　(1.0次 追加)
-$global:SQL_VIEW_HOUSEHOLD_BASE="view_tf_02"    # TF_世帯属性　(1.0次 追加)
+$global:SQL_VIEW_CUSTOMER_BASE="view_tf_01"        # TF_顧客属性　(1.0次 追加)
+$global:SQL_VIEW_HOUSEHOLD_BASE="view_tf_02"       # TF_世帯属性　(1.0次 追加)
 $global:SQL_VIEW_TERM_DEPOSIT_BASE="view_tf_03"    # TF_個別明細固定性預金　(1.0次 追加)
-$global:SQL_VIEW_LIQUID_DEPOSIT_BASE="view_tf_04"    # TF_個別明細流動性預金　(1.0次 追加)
+$global:SQL_VIEW_LIQUID_DEPOSIT_BASE="view_tf_04"  # TF_個別明細流動性預金　(1.0次 追加)
+$global:SQL_VIEW_PROFILE_BASE="view_tf_11"         # TF_顧客プロファイル　(1.0次 追加)
 
 
 # 未使用
@@ -239,6 +240,7 @@ $global:FOREIGN_VIEWNAME="TF_個別明細外貨預金"
 $global:FUND_VIEWNAME="TF_個別明細投信口座"
 $global:FUND_DETAIL_VIEWNAME="TF_個別明細投信口座明細"
 $global:PRODUCT_VIEWNAME="TF_商品"
+$global:PROFILE_VIEWNAME ="TF_顧客プロファイル"
 
 # $global:CUTOMER_BASE_TBNAME   ="TF_顧客属性"   (1.0次 VIEWに変更)
 # $global:HOUSEHOLD_BASE_TBNAME ="TF_世帯属性"   (1.0次 VIEWに変更)
