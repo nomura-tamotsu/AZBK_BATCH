@@ -35,6 +35,7 @@
 /* %05 | 15/02/04 | 土居 康一郎 | 定期の枝番号の桁数修正 5桁→7桁           */
 /* %06 | 15/02/04 | 土居 康一郎 | 契約口座存在チェックにて検索キーをCIFから */
 /*     |          |             | 口座番号に変更（１０次ではCIF≠口座番号） */
+/* %07 | 15/03/24 | 土居 康一郎 | ITa_019 流動性預金科目誤り修正 1211→1221 */
 /*==========================================================================*/
 /*****************************************************************************/
 /*---------------------------------------------------------------------------*/
@@ -675,8 +676,8 @@ static int AddAccountRyudo()
     EXEC SQL DECLARE CUR_RYU CURSOR FOR
         SELECT DISTINCT 店番, CIFNO, 科目ID, 口座番号
           FROM TF_個別明細流動性預金
-         WHERE 科目ID = '1211'
-       ;
+         WHERE 科目ID = '1221'
+       ;             /* %07 ITa_019 Edit 1211→1221 */
 /* %03 Edit End */
 	if( sqlca.sqlcode < 0 ){
 		send_err ( m$sql_statment, sqlca.sqlcode, "DECLARE(CUR_RYU) エラー", NULL, NULL, G_STATION);
@@ -1685,7 +1686,10 @@ static int checkDelAccount()
 /* %06 Edit End  */
 /* %03 Edit START  */
 //            strcat( sqltext, "' AND 科目ID='205110' " );
-            strcat( sqltext, "' AND 科目ID='1211' " );
+/* %07 ITa_019 Edit START 1211→1221 */
+//            strcat( sqltext, "' AND 科目ID='1211' " );
+            strcat( sqltext, "' AND 科目ID='1221' " );
+/* %07 ITa_019 End */
 /* %03 Edit End  */
         }
 /* %03 Edit START  */
