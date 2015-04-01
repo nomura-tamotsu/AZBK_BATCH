@@ -53,11 +53,11 @@ rem ============================================================================
 rem  ÉvÉçÉOÉâÉÄà¯êîéÊìæ
 rem ============================================================================
 set MYPARM=
-set SPACE=
+set SPACE= 
 
 :check
     if "%1"=="" goto final
-    set MYPARM=%MYPARM%%SPACE%%1
+    set MYPARM=%MYPARM% %1
     shift
     goto check
 :final
@@ -74,7 +74,7 @@ set PGM_NAME=%PS_PATH%%PGM%%SUFFIX%
 rem ---------------------------------------
 rem  POWERSHELLÇ©ÇÁÇÃãNìÆ
 rem ---------------------------------------
-set RUN_PGM=%POWERSHELL%%SPACE%%PGM_NAME%%SPACE%%MYPARM%%EXIT_PROC%
+set RUN_PGM=%POWERSHELL% %PGM_NAME% %MYPARM% %EXIT_PROC%
 
 rem echo %RUN_PGM%
 
