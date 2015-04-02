@@ -36,6 +36,7 @@
 /* %06 | 15/02/04 | 土居 康一郎 | 契約口座存在チェックにて検索キーをCIFから */
 /*     |          |             | 口座番号に変更（１０次ではCIF≠口座番号） */
 /* %07 | 15/03/24 | 土居 康一郎 | ITa_019 流動性預金科目誤り修正 1211→1221 */
+/* %08 | 15/04/02 | 土居 康一郎 | ITa_040 投信検索時、キーに口座番号追加    */
 /*==========================================================================*/
 /*****************************************************************************/
 /*---------------------------------------------------------------------------*/
@@ -1304,6 +1305,9 @@ static int AddAccountToshin()
 					WHERE 契約者番号 = :h_UserID
 						AND 店番 = :h_BranchNo
 						AND 科目ID = :h_AccntType_wk
+/* %08 Add Start */
+						AND 口座番号 = :h_AccntNo
+/* %08 Add End   */
 					;
 			if ( sqlca.sqlcode < 0 ){
 				send_err ( m$sql_statment, sqlca.sqlcode, "TFB_テレバン契約口座検索エラー(投信)", NULL, NULL, G_STATION);
@@ -1731,7 +1735,12 @@ static int checkDelAccount()
             strcat( sqltext, "' AND ");
             strcat( sqltext, "CIFNO='");
             strcat( sqltext, h_CIFNO);
-            strcat( sqltext, "' ");      
+/* %08 Add Start */
+            strcat( sqltext, "' AND ");
+            strcat( sqltext, "口座番号='");
+            strcat( sqltext, h_AccntNo);
+/* %08 Add End   */
+            strcat( sqltext, "' ");
 		}
         /* 外貨預金 */
         else if( strncmp(h_AccntType, LOADING_ACCNT_TYPE_GF, 4) == 0 ||
