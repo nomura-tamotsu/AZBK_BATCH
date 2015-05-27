@@ -28,7 +28,6 @@
 /* %00 | 14/04/16 | ISID        | First Edition.                            */
 /* %01 | 14/06/02 | ISID        | 仕様変更 センターID4桁対応:先頭に0を付加  */
 /* %02 | 14/08/29 | ISID        | 仕様変更 パスワードをBANK・R用に変更      */
-/* %03 | 14/09/01 | ISID        | パフォーマンス改善                        */
 /*==========================================================================*/
 /*---------------------------------------------------------------------------*/
 /* Standard include specification                                            */
@@ -905,35 +904,7 @@ static int updateTables( char *g_szDtlMsg )
 
     memset( sqlcmd, 0x00, sizeof(sqlcmd) );
 
-	/* TM_ユーザテーブルの更新 */
-	/* %03 Change */
-    G_POSITION = __LINE__;
-    EXEC SQL UPDATE TF_個別明細流動性預金 
-		SET
-           ユーザ名   = :h_UserName :hi_UserName,
-           ユーザ略称 = :h_UserRyakusho :hi_UserRyakusho,
-           センタID   = :h_CenterID :hi_CenterID,
-           開始日 = TO_DATE(:h_StartDate :hi_StartDate,'YYYY-MM-DD'),
-           終了日 = TO_DATE(:h_EndDate :hi_EndDate,'YYYY-MM-DD'),
-           店     = :h_Ten :hi_Ten,
-           部     = :h_Bu :hi_Bu,
-           課     = :h_Ka :hi_Ka,
-           登録日 = SYSDATE,
-           登録者 = :h_ChangeName
-		WHERE
-			ユーザID  = :h_UserID 
-
-		;
-
-	if( sqlca.sqlcode != 0 ) {
-        sprintf( g_szDtlMsg, "TM_ユーザテーブル更新エラー(sqlca.sqlcode=%d)", sqlca.sqlcode );
-        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
-		send_err ( m$sql_statment, sqlca.sqlcode, "UPDATE TM_ユーザ", NULL, NULL, G_STATION);
-        return(ERROR);
-    }
-
-#if 0
-    
+    /* TM_ユーザテーブルの更新 */
     strcpy( sqlcmd, "UPDATE TM_ユーザ SET ");
 
     setUpdateText( 1, sqlcmd, hi_UserName, "ユーザ名", h_UserName);
@@ -963,8 +934,6 @@ static int updateTables( char *g_szDtlMsg )
 		send_err ( m$sql_statment, sqlca.sqlcode, "UPDATE TM_ユーザ", NULL, NULL, G_STATION);
         return(ERROR);
     }
-
-#endif
 
     return NORMAL;
 }
