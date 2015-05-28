@@ -29,6 +29,7 @@
 /* Mod   yy/mm/dd   Coder           Comment                                 */
 /*-----+----------+-------------+-------------------------------------------*/
 /* %00 | 14/04/21 | ISID        | First Edition.                            */
+/* %01 | 14/10/15 | ISID        | UpLoad‘ÎÛ‚ðº°Ù¾ÝÀ°‚Ì‚Ý‚É                 */
 /*==========================================================================*/
 /*---------------------------------------------------------------------------*/
 /* Standard include specification                                            */
@@ -514,7 +515,11 @@ static int cursorOpen( char *g_szDtlMsg )
             TM_ƒ†[ƒU                         /* TM_ƒ†[ƒUƒe[ƒuƒ‹    */
         WHERE
             “o˜^“ú >= TO_DATE(:h_FROM_TS, 'YYYYMMDD HH24MISS')  AND
-			“o˜^“ú <  TO_DATE(:h_TO_TS,   'YYYYMMDD HH24MISS')
+/* %01 Change Start
+			“o˜^“ú <  TO_DATE(:h_TO_TS,   'YYYYMMDD HH24MISS')  
+   %01 Chnage End */
+			“o˜^“ú <  TO_DATE(:h_TO_TS,   'YYYYMMDD HH24MISS')  AND  
+			ƒZƒ“ƒ^ID = '0001'                                      
         ORDER BY
             ƒ†[ƒUID;
 
