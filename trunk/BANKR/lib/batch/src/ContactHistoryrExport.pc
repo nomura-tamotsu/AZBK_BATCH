@@ -65,6 +65,8 @@
 /* %07 | 14/09/05 | ISID        | 顧客管理番号の採番方法修正2               */
 /*                              |   画面での外部データ取り込みの対応        */
 /* %08 | 15/02/09 | 土居 康一郎 | 1.0次 CIFNO10桁対応                       */
+/* %09 | 15/04/08 | 土居 康一郎 | 0.5次不具合対応 連携データのキャンペーン  */
+/*     |          |             |   名セットをeMuSC仕様に戻す(%05の取消)    */
 /*==========================================================================*/
 /*---------------------------------------------------------------------------*/
 /* Standard include specification                                            */
@@ -2733,11 +2735,13 @@ static int setCampaignName()
                 else if ( memcmp( h_ExternalType, CONTACT_LOG_S_NU, 1) == 0 ) {
                     strcat( g_SendRec, CONTACT_LOG_S_IN_NU );
                 }
-				/* %05 Add */
-				else {
-					/* TMインバウンド */
-					strcat( g_SendRec, CONTACT_LOG_S_IN_TM );
-				}
+/* %09 DELETE 上位システムがキャンペーン名で表示用加工しているため、eMusc同様に空で連携する */
+//				/* %05 Add */
+//				else {
+//					/* TMインバウンド */
+//					strcat( g_SendRec, CONTACT_LOG_S_IN_TM );
+//				}
+/* *%09 DELETE */
 
             }
 			else {
@@ -2753,9 +2757,11 @@ static int setCampaignName()
 			rtrim ( h_CampaignName );			/* Add %04 */	
             strcat( g_SendRec, h_CampaignName );
         }
-		else {
-			strcat( g_SendRec, CONTACT_LOG_S_OUT ); /* Add %05 */	
-		}
+/* %09 DELETE キャンペーン名(略称）はコンタクト履歴から取得しているのでNULLはない */
+//		else {
+//			strcat( g_SendRec, CONTACT_LOG_S_OUT ); /* Add %05 */	
+//		}
+/* %09 DELETE */
     }
     g_SendRec[ (unsigned int)strlen(g_SendRec) ] = 0x09;
 
