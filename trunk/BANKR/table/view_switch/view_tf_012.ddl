@@ -1,16 +1,16 @@
 --/*==========================================================================*/
---/* COPYRIGHT Information Services International-Dentsu, Ltd.                */
+--/* COPYRIGHT Brainyworks LTD. 2001,2008                                     */
 --/* LICENSED MATERIAL - PROGRAM PROPERTY OF Brainyworks LTD.                 */
 --/*==========================================================================*/
 --/*                                                                          */
---/* SYSTEM   : BANKER ƒRƒ“ƒ^ƒNƒgƒZƒ“ƒ^[                                    */
+--/* SYSTEM   : e-MARKETBRAIN                                                 */
 --/*                                                                          */
 --/* FILE     : CREATE VIEW SCRIPT.                                           */
 --/* TABLE    : TF_ŒÚ‹q‘®«                                                   */
 --/*                                                                          */
 --/* Mod   yy/mm/dd   Coder         Comment                                   */
 --/*-----+----------+-------------+-------------------------------------------*/
---/* %00 | 15/01/15 | “y‹ Nˆê˜Y | First Eddition.                           */
+--/* %00 | YY/MM/DD |             | First Eddition.                           */
 --/*==========================================================================*/
 
 CREATE OR REPLACE VIEW TF_ŒÚ‹q‘®«
@@ -144,7 +144,7 @@ CREATE OR REPLACE VIEW TF_ŒÚ‹q‘®«
     ,ƒf[ƒ^Šî€“ú
     ,ƒ}ƒ‹—D
     )
- AS SELECT
+ AS SELECT 
     TF_ŒÚ‹q‘®«B.“X”Ô
     ,TF_ŒÚ‹q‘®«B.CIFNO
     ,TF_ŒÚ‹q‘®«B.ŒÂlŠé‹Æ”Ô†
@@ -293,7 +293,7 @@ COMMENT ON COLUMN TF_ŒÚ‹q‘®«.ZŠƒR[ƒh IS 'TF_ZŠ.ZŠƒR[ƒh‚ðŽQÆBZŠƒR[ƒ
 COMMENT ON COLUMN TF_ŒÚ‹q‘®«.—X•Ö”Ô† IS 'ƒnƒCƒtƒ“•ÒW‚ ‚è';
 COMMENT ON COLUMN TF_ŒÚ‹q‘®«.•â•ZŠ IS '‘SŠp‚Ì‚Ý50•¶Žš';
 COMMENT ON COLUMN TF_ŒÚ‹q‘®«.ZŠ•ÏXƒtƒ‰ƒO IS 'BLANK:–¢XV  *:XV';
-COMMENT ON COLUMN TF_ŒÚ‹q‘®«.•â•ZŠƒJƒi IS '”¼ŠpƒJƒi‚Ì‚Ý60•¶Žš@ Žš’š–ÚƒJƒi(40•¶Žš)+ "”¼ŠpƒXƒy[ƒX" + ”Ô’nƒJƒi(30•¶Žš) + "”¼ŠpƒXƒy[ƒX" + ‹C•tƒJƒii30•¶Žšj‚ªÝ’èiŒ…‚ð’´‚¦‚éê‡‚Í60•¶Žš‚Ü‚Å‚ªÝ’è‚³‚ê‚éj';
+COMMENT ON COLUMN TF_ŒÚ‹q‘®«.•â•ZŠƒJƒi IS '”¼ŠpƒJƒi';
 COMMENT ON COLUMN TF_ŒÚ‹q‘®«.ZŠƒJƒi•ÏXƒtƒ‰ƒO IS 'BLANK:–¢XV  *:XV';
 COMMENT ON COLUMN TF_ŒÚ‹q‘®«.Ž©‘î“d˜b”Ô† IS 'ƒnƒCƒtƒ“•ÒW‚ ‚è';
 COMMENT ON COLUMN TF_ŒÚ‹q‘®«.Ž©‘î“d˜b”Ô†XVƒtƒ‰ƒO IS 'BLANK:–¢XV  *:XV';
@@ -350,7 +350,7 @@ COMMENT ON COLUMN TF_ŒÚ‹q‘®«.ƒŠƒXƒN¤•iŽc‚ IS '’PˆÊ:‰~BŽd‘g—a‹àŽc‚{ŠO‰Ý—a‹à
 COMMENT ON COLUMN TF_ŒÚ‹q‘®«.ƒeƒŒƒoƒ“Œ_–ñ IS '0:‚È‚µ 1:Œ_–ñ@9:‰ð–ñ';
 COMMENT ON COLUMN TF_ŒÚ‹q‘®«.ƒeƒŒƒoƒ“Œ_–ñ“ú IS 'YYYYMMDDBƒeƒŒƒoƒ“Œ_–ñ=1‚Ìê‡Œ_–ñ“úA:ƒeƒŒƒoƒ“Œ_–ñ=9‚Ìê‡‰ð–ñ“ú‚ðŽ¦‚·';
 COMMENT ON COLUMN TF_ŒÚ‹q‘®«.IBŒ_–ñ IS '0:‚È‚µ 1:Œ_–ñ@9:‰ð–ñ';
-COMMENT ON COLUMN TF_ŒÚ‹q‘®«.IBŒ_–ñŽÒID IS '10Œ…ŒÅ’è’·';
+COMMENT ON COLUMN TF_ŒÚ‹q‘®«.IBŒ_–ñŽÒID IS '12Œ…ŒÅ’è’·';
 COMMENT ON COLUMN TF_ŒÚ‹q‘®«.IBŒ_–ñ\ž“X”Ô IS '3Œ…ŒÅ’è’·';
 COMMENT ON COLUMN TF_ŒÚ‹q‘®«.IBŒ_–ñ‘ã•\ŒûÀ‰È–Ú IS '4Œ…ŒÅ’èB emuscƒR[ƒh•\.‰È–ÚID‚ðŽQÆ';
 COMMENT ON COLUMN TF_ŒÚ‹q‘®«.IBŒ_–ñ‘ã•\ŒûÀ”Ô† IS '7Œ…ŒÅ’è’·';
