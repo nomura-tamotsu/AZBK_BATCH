@@ -28,13 +28,16 @@ ${DC_WAS_PWD} = PDECODE ${EX_WAS_MODE} ${EX_WAS_USER}
 # 予約処理 実行モジュールパス
 #----------------------------------------------------------------------
 # CLASS PATH
-${global:BR_JAVA_CLPATH01} = "${COM_WAS_BASE_DIRS}\profiles\brccazbk\installedApps\${HOST_NAME}Node01Cell\eMB.ear\*"
+#${global:BR_JAVA_CLPATH01} = "${COM_WAS_BASE_DIRS}\profiles\brccazbk\installedApps\${HOST_NAME}Node01Cell\eMB.ear\*"
+${global:BR_JAVA_CLPATH01} = "${COM_WAS_BASE_DIRS}\profiles\bankrazb\installedApps\${HOST_NAME}Node01Cell\eMB.ear\*"
 ${global:BR_JAVA_CLPATH02} = "${COM_WAS_BASE_DIRS}\lib\j2ee.jar;${COM_WAS_BASE_DIRS}\plugins\*;${COM_WAS_BASE_DIRS}\java_1.7_64\jre\lib\ext\*;${COM_WAS_BASE_DIRS}\lib\*;"
 # CLASS FILE
 ${global:BR_JAVA_CLFILE01} = "com.brainyworks.marketbrain.tb.ejb.tbbatch.executereservedtrans.ExecuteReservedTransStartBatch"
 # SECURITY PROPERTIES
-${global:BR_JAVA_SECPRP01} = "-Dcom.ibm.SSL.ConfigURL=file:${COM_WAS_BASE_URLS}/profiles/brccazbk/properties/ssl.client.props"
-${global:BR_JAVA_SECPRP02} = "-Dcom.ibm.CORBA.ConfigURL=file:${COM_WAS_BASE_URLS}/profiles/brccazbk/properties/sas.client.props"
+#${global:BR_JAVA_SECPRP01} = "-Dcom.ibm.SSL.ConfigURL=file:${COM_WAS_BASE_URLS}/profiles/brccazbk/properties/ssl.client.props"
+#${global:BR_JAVA_SECPRP02} = "-Dcom.ibm.CORBA.ConfigURL=file:${COM_WAS_BASE_URLS}/profiles/brccazbk/properties/sas.client.props"
+${global:BR_JAVA_SECPRP01} = "-Dcom.ibm.SSL.ConfigURL=file:${COM_WAS_BASE_URLS}/profiles/bankrazb/properties/ssl.client.props"
+${global:BR_JAVA_SECPRP02} = "-Dcom.ibm.CORBA.ConfigURL=file:${COM_WAS_BASE_URLS}/profiles/bankrazb/properties/sas.client.props"
 ${global:BR_JAVA_SECPRP03} = "-Dcom.ibm.CORBA.loginUserid=${EX_WAS_USER}"
 ${global:BR_JAVA_SECPRP04} = "-Dcom.ibm.CORBA.loginPassword=${DC_WAS_PWD}"
 ${global:BR_JAVA_SECPRP05} = "-Dcom.ibm.CORBA.loginSource=properties"
