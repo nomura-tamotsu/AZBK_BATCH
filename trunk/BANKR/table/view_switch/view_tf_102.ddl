@@ -24,7 +24,7 @@ CREATE OR REPLACE VIEW TF_商品
     ,TF_商品B.商品略称
  FROM TF_商品B
 ;
-COMMENT ON COLUMN TF_商品.商品ID IS '';
-COMMENT ON COLUMN TF_商品.商品名 IS '';
-COMMENT ON COLUMN TF_商品.商品略称 IS '';
+COMMENT ON COLUMN TF_商品.商品ID IS '商品ID6桁固定';
+COMMENT ON COLUMN TF_商品.商品名 IS '一覧表示時使用';
+COMMENT ON COLUMN TF_商品.商品略称 IS 'BANK・Rバッチ処理で全角スペース2Bytesを設定';
 EXIT;

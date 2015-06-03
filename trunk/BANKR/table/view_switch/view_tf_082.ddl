@@ -26,8 +26,8 @@ CREATE OR REPLACE VIEW TF_個別明細投信口座明細
     ,純資産
     ,個別元本
     ,取得金額
-    ,解約価額
     ,標準価額
+    ,解約価額
     ,当初取引日
     ,最近取引日
     ,取扱店合計
@@ -47,8 +47,8 @@ CREATE OR REPLACE VIEW TF_個別明細投信口座明細
     ,TF_個別明細投信口座明細B.純資産
     ,TF_個別明細投信口座明細B.個別元本
     ,TF_個別明細投信口座明細B.取得金額
-    ,TF_個別明細投信口座明細B.解約価額
     ,TF_個別明細投信口座明細B.標準価額
+    ,TF_個別明細投信口座明細B.解約価額
     ,TF_個別明細投信口座明細B.当初取引日
     ,TF_個別明細投信口座明細B.最近取引日
     ,TF_個別明細投信口座明細B.取扱店合計
@@ -57,22 +57,22 @@ CREATE OR REPLACE VIEW TF_個別明細投信口座明細
  FROM TF_個別明細投信口座明細B
 ;
 COMMENT ON COLUMN TF_個別明細投信口座明細.店番 IS 'TM_営業店.店番を参照。';
-COMMENT ON COLUMN TF_個別明細投信口座明細.CIFNO IS '';
-COMMENT ON COLUMN TF_個別明細投信口座明細.世帯番号 IS '有効桁数７桁（固定長）';
-COMMENT ON COLUMN TF_個別明細投信口座明細.個人企業番号 IS '';
-COMMENT ON COLUMN TF_個別明細投信口座明細.口座番号 IS '（＝CIFNO）';
-COMMENT ON COLUMN TF_個別明細投信口座明細.商品ID IS '';
-COMMENT ON COLUMN TF_個別明細投信口座明細.銘柄コード IS '商品サブコード';
-COMMENT ON COLUMN TF_個別明細投信口座明細.銘柄名 IS '全角';
+COMMENT ON COLUMN TF_個別明細投信口座明細.CIFNO IS '有効桁数10桁（固定長）';
+COMMENT ON COLUMN TF_個別明細投信口座明細.世帯番号 IS '有効桁数10桁（固定長）';
+COMMENT ON COLUMN TF_個別明細投信口座明細.個人企業番号 IS '個人企業番号："99999999999"固定　【未使用】';
+COMMENT ON COLUMN TF_個別明細投信口座明細.口座番号 IS '7桁固定（0パディング）';
+COMMENT ON COLUMN TF_個別明細投信口座明細.商品ID IS '【未使用】';
+COMMENT ON COLUMN TF_個別明細投信口座明細.銘柄コード IS 'ファンドコード8桁固定';
+COMMENT ON COLUMN TF_個別明細投信口座明細.銘柄名 IS '銘柄名';
 COMMENT ON COLUMN TF_個別明細投信口座明細.数量 IS 'ZZZZZZZZZZZZZZ9.00';
 COMMENT ON COLUMN TF_個別明細投信口座明細.純資産 IS 'ZZZZZZZZZZZZZZ9.00';
 COMMENT ON COLUMN TF_個別明細投信口座明細.個別元本 IS 'ZZZZZZZZZZZZZZ9.00';
 COMMENT ON COLUMN TF_個別明細投信口座明細.取得金額 IS 'ZZZZZZZZZZZZZZ9.00';
-COMMENT ON COLUMN TF_個別明細投信口座明細.解約価額 IS 'ZZZZZZZZZZZZZZ9.00';
 COMMENT ON COLUMN TF_個別明細投信口座明細.標準価額 IS 'ZZZZZZZZZZZZZZ9.00';
+COMMENT ON COLUMN TF_個別明細投信口座明細.解約価額 IS 'ZZZZZZZZZZZZZZ9.00';
 COMMENT ON COLUMN TF_個別明細投信口座明細.当初取引日 IS '';
 COMMENT ON COLUMN TF_個別明細投信口座明細.最近取引日 IS '';
 COMMENT ON COLUMN TF_個別明細投信口座明細.取扱店合計 IS 'ZZZZZZZZZZZZZZ9.00';
-COMMENT ON COLUMN TF_個別明細投信口座明細.預り区分 IS '0：未登録　1：特定あり';
+COMMENT ON COLUMN TF_個別明細投信口座明細.預り区分 IS '0：一般預り　1：特定預り　2：NISA預り';
 COMMENT ON COLUMN TF_個別明細投信口座明細.データ基準日 IS '';
 EXIT;
