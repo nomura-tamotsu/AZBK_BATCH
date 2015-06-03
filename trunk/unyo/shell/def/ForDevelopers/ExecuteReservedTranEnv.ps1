@@ -29,7 +29,7 @@ ${DC_WAS_PWD} = PDECODE ${EX_WAS_MODE} ${EX_WAS_USER}
 #----------------------------------------------------------------------
 # CLASS PATH
 #${global:BR_JAVA_CLPATH01} = "${COM_WAS_BASE_DIRS}\profiles\brccazbk\installedApps\${HOST_NAME}Node01Cell\eMB.ear\*"
-${global:BR_JAVA_CLPATH01} = "${COM_WAS_BASE_DIRS}\profiles\bankrazb\installedApps\${HOST_NAME}Node01Cell\eMB.ear\*"
+${global:BR_JAVA_CLPATH01} = "${COM_WAS_BASE_DIRS}\profiles\bankrazb\installedApps\${HOST_NAME}Node03Cell\eMB.ear\*"
 ${global:BR_JAVA_CLPATH02} = "${COM_WAS_BASE_DIRS}\lib\j2ee.jar;${COM_WAS_BASE_DIRS}\plugins\*;${COM_WAS_BASE_DIRS}\java_1.7_64\jre\lib\ext\*;${COM_WAS_BASE_DIRS}\lib\*;"
 # CLASS FILE
 ${global:BR_JAVA_CLFILE01} = "com.brainyworks.marketbrain.tb.ejb.tbbatch.executereservedtrans.ExecuteReservedTransStartBatch"
