@@ -4,9 +4,9 @@
 #
 # SYSTEM        : BANK・R－CC
 #
-# PROGRAM NAME  : テレバン契約口座情報アップロード
+# PROGRAM NAME  : テレバン契約者情報アップロード
 #
-# MODULE NAME   : mb_tb_account_info_upload
+# MODULE NAME   : mb_tb_contractor_upload
 #
 # INPUT         : None
 #
@@ -15,17 +15,18 @@
 #
 # Mod   yy/mm/dd   Coder           Comment
 #-----+----------+---------------+-------------------------------------------
-# %00 | 15/02/09 | 土居 康一郎   | First Edition.                            
+# %00 | 15/02/05 | 土居 康一郎   | First Edition.                            
+# %01 | 15/06/10 | 土居 康一郎   | 実行ファイル名変更                        
 #============================================================================
 #============================================================================
-# 関数名        mb_tb_account_info_upload-End-Function
+# 関数名        mb_tb_contractor_info_upload-End-Function
 # 概要          終了処理
 #                 goto文が使用できないので、この関数でexit処理を行う
 # 引数          なし
 # 戻り値        $exit_code
 # 戻り値型      なし
 #============================================================================
-function local:mb_tb_account_info_upload-End-Function () {
+function local:mb_tb_contractor_info_upload-End-Function () {
 	
 	#
 	# このPSのEXITCODEをセーブ
@@ -57,42 +58,42 @@ $OUTMSG_CMD    = $SCRIPT_DIR + "\outmsg.ps1"
 
 
 # 処理名セット
-$BATNAME  = "mb_tb_account_info_upload"
-$JOB_NAME = "テレバン契約口座情報アップロード"
+$BATNAME  = "mb_tb_contractor_upload"
+$JOB_NAME = "テレバン契約者情報アップロード"
 
 # exitコード初期化
 $exit_code   = $RC_OK
 
 
 # 開始メッセージ
-. $OUTMSG_CMD $INFO_MSG $RC_OK "*****テレバン契約口座情報アップロード開始*****"
+. $OUTMSG_CMD $INFO_MSG $RC_OK "*****テレバン契約者情報アップロード開始*****"
 . $OUTMSG_CMD $START_MSG $RC_OK $JOB_NAME
 
 #---------------------------------------
-# テレバン契約口座情報ファイル名をセット
+# テレバン契約者情報ファイル名をセット
 #---------------------------------------
-$OUTPUT_DATA_FILE = "$EXT_UPLOAD_DIR\" + $M_TB_ACCOUNT_BASE + ".dat"
+$OUTPUT_DATA_FILE = "$EXT_UPLOAD_DIR\" + $M_TB_CONTRACT_BASE + ".dat"
 
 #---------------------------------------
-# テレバン契約口座情報ファイル存在チェック
+# テレバン契約者情報ファイル存在チェック
 #  (未送信ファイルチェック)
 #---------------------------------------
 if ( ( Test-Path $OUTPUT_DATA_FILE ) ) {
 	# ファイル存在チェックエラーメッセージ
 	. $OUTMSG_CMD $FILE_NOT_SEND_MSG $RC_NG $OUTPUT_DATA_FILE
 	$exit_code = $RC_NG
-	mb_tb_account_info_upload-End-Function
+	mb_tb_contractor_info_upload-End-Function
 }
 
 #---------------------------------------
-# テレバン契約口座情報データの抽出実行
+# テレバン契約者情報データの抽出実行
 #---------------------------------------
-. $OUTMSG_CMD $INFO_MSG $RC_OK "テレバン契約口座情報の抽出を開始します．"
+. $OUTMSG_CMD $INFO_MSG $RC_OK "テレバン契約者情報の抽出を開始します．"
 
-$rc=TbAccountInfoExport $OUTPUT_DATA_FILE
+$rc=TbContractorInfoExport $OUTPUT_DATA_FILE
 $ret=$?
 if ( $ret -ne "True" ) {
-       	. $OUTMSG_CMD $COM_ERROR $RC_NG "テレバン契約口座情報の抽出でエラーが発生しました"
+       	. $OUTMSG_CMD $COM_ERROR $RC_NG "テレバン契約者情報の抽出でエラーが発生しました"
 
 	if ( ( Test-Path $OUTPUT_DATA_FILE ) ) {
 		# エラー時は、データファイルを退避
@@ -117,17 +118,17 @@ if ( $ret -ne "True" ) {
 		if ( $ret -ne "TRUE" ) {
 	       		. $OUTMSG_CMD $COM_ERROR $RC_NG "データファイル退避($OUTPUT_DATA_FILE)でエラーが発生しました"
 			$exit_code=$RC_NG
-			mb_tb_account_info_upload-End-Function
+			mb_tb_contractor_info_upload-End-Function
 		}
 		. $OUTMSG_CMD $INFO_MSG $RC_OK "エラーデータファイルを退避しました($new_file_name)"
 	}
 
 	$exit_code = $RC_NG
-	mb_tb_account_info_upload-End-Function
+	mb_tb_contractor_info_upload-End-Function
 
 }
 
-. $OUTMSG_CMD $INFO_MSG $RC_OK "テレバン契約口座情報アップロード処理を終了しました．"
+. $OUTMSG_CMD $INFO_MSG $RC_OK "テレバン契約者情報アップロード処理を終了しました．"
 
 
 
@@ -135,4 +136,4 @@ if ( $ret -ne "True" ) {
 #---------------------------------------
 # 終了処理
 #---------------------------------------
-mb_tb_account_info_upload-End-Function
+mb_tb_contractor_info_upload-End-Function
