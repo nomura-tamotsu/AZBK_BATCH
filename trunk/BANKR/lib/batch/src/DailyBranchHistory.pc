@@ -28,6 +28,7 @@
 /* %00 | 14/04/17 | ISID        | First Edition.                            */
 /* %01 | 14/06/02 | ISID        | 仕様変更 センターID4桁対応:先頭に0を付加  */
 /* %02 | 14/09/01 | ISID        | パフォーマンス改善                        */
+/* %03 | 15/07/07 | 土居 康一郎 | 1.0次対応 CIFNO 10桁対応                  */
 /*==========================================================================*/
 /*---------------------------------------------------------------------------*/
 /* Standard include specification                                            */
@@ -59,7 +60,8 @@ typedef struct _RECV_FILE_DATA {
     char    record_id               [  1];      /* 処理区分 */
     char    nippo_id                [ 10];      /* 営業日報ID */
     char    history_timestamp       [ 19];      /* 日時 */
-    char    cif_no                  [  7];      /* CIFNO */
+// %03 EDIT   char    cif_no                  [  7];      /* CIFNO */
+    char    cif_no                  [ 10];      /* CIFNO */
     char    user_id                 [  7];      /* 担当者ID */
     char    ten_no                  [  3];      /* 店番 */
     char    uketsuke_type           [ 60];      /* 受付区分 */
@@ -68,7 +70,7 @@ typedef struct _RECV_FILE_DATA {
     char    shohin_name             [ 60];      /* 商品名 */
     char    trade_status            [ 60];      /* 取引状況 */
     char    kingaku                 [ 12];      /* 金額 */
-    char    yobi                    [ 78];      /* 予備 */
+//  %03 DEL  char    yobi                    [ 78];      /* 予備 */
     char    lf                      [  1];      /* 改行コード */
 } RECV_FILE_DATA;
 
@@ -111,8 +113,8 @@ char g_szDtlMsg           [AP_C_NOTE_LEN_H];         /* 事象詳細文字列       */
 char    process_name[43];
 char    g_work[1024];
 
-int file_open_flag1  = 0;		/* ファイルオープンフラグ(データファイル用) */
-int file_open_flag2  = 0;		/* ファイルオープンフラグ(処理結果ファイル用)  */
+int file_open_flag1  = 0;       /* ファイルオープンフラグ(データファイル用) */
+int file_open_flag2  = 0;       /* ファイルオープンフラグ(処理結果ファイル用)  */
 
 /*---------------------------------------------------------------------------*/
 /* Host Variable                                                             */
@@ -122,14 +124,14 @@ EXEC SQL BEGIN DECLARE SECTION;
     /* ＤＢ接続情報 */
     char sqlcmd[2048];
 
-	/* TH_営業店コンタクト履歴テーブル */
+    /* TH_営業店コンタクト履歴テーブル */
     char  h_ContactID[23];                           /* コンタクトID         */
     short hi_ContactID;
     int   h_EdaNo;                                 /* 枝番                 */
     short hi_EdaNo;
     char  h_NippoID[11];                             /* 営業店日報ID         */
     short hi_NippoID;
-    varchar          h_UpdateTime[20];				 /* 登録日時             */
+    varchar          h_UpdateTime[20];               /* 登録日時             */
     short hi_UpdateTime;
     char  h_CIFNO[11];                               /* 取引先番号           */
     short hi_CIFNO;
@@ -137,15 +139,15 @@ EXEC SQL BEGIN DECLARE SECTION;
     short hi_UserID;
     char  h_TenNo[4];                                /* 店番                 */
     short hi_TenNo;
-    varchar          h_UketsukeType[61];			 /* 受付区分             */
+    varchar          h_UketsukeType[61];             /* 受付区分             */
     short hi_UketsukeType;
-    varchar          h_VisitSchedule[51];			 /* 次回訪問予定         */
+    varchar          h_VisitSchedule[51];            /* 次回訪問予定         */
     short hi_VisitSchedule;
-    varchar          h_Naiyo[401];					 /* 応対内容             */
+    varchar          h_Naiyo[401];                   /* 応対内容             */
     short hi_Naiyo;
-    varchar          h_ShohinName[61];				 /* 商品名               */
+    varchar          h_ShohinName[61];               /* 商品名               */
     short hi_ShohinName;
-    varchar          h_TradeStatus[61];				 /* 取引状況             */
+    varchar          h_TradeStatus[61];              /* 取引状況             */
     short hi_TradeStatus;
     char  h_Kingaku[13];                             /* 金額                 */
     short hi_Kingaku;
@@ -164,7 +166,7 @@ EXEC SQL BEGIN DECLARE SECTION;
 
     long h_DATA_COUNT;
 
-	char  h_CenterId[5];                             /* センタID             */
+    char  h_CenterId[5];                             /* センタID             */
     short hi_CenterId;
 
 
@@ -227,30 +229,30 @@ static void finalize( int rc, int iRecNum, int iOkNum );
 /*****************************************************************************/
 int main( int argc, char *argv[] )
 {
-	int     exit_code = NORMAL;
-	int		rc = NORMAL;
-	unsigned int RecvSt;
+    int     exit_code = NORMAL;
+    int     rc = NORMAL;
+    unsigned int RecvSt;
 
 
     RECV_FILE_DATA    dData;                         /* データ・レコード     */
     COUNT             dCount; 
     long              iCommitCnt;                  /* 分割コミット用カウンタ */
-	
-	int               rc_fin;
+    
+    int               rc_fin;
 
 
-	/*-----------------------------*/
+    /*-----------------------------*/
     /* Print process start message */
     /*-----------------------------*/
 
     strcpy( G_STATION, "DailyBranchHistory" );
-	
-	memset(process_name,0x00,sizeof(process_name));
+    
+    memset(process_name,0x00,sizeof(process_name));
     strcpy(process_name,"日次営業店コンタクト履歴データ取込処理");
 
     send_err( m$start_process, NORMAL, process_name, "", "", G_STATION );
 
-	memset( &dCount, 0x00, sizeof( dCount ) );
+    memset( &dCount, 0x00, sizeof( dCount ) );
     iCommitCnt = 0;
     g_ContactSeqNo = 0;
 
@@ -281,32 +283,32 @@ int main( int argc, char *argv[] )
         /* -------------------------------------- */
         /* 営業店コンタクト履歴ファイルからの読込 */
         /* -------------------------------------- */
-		RecvSt = (unsigned int)fread( (char *) &dData, sizeof( RECV_FILE_DATA ), 1, g_pfRecvFile );
+        RecvSt = (unsigned int)fread( (char *) &dData, sizeof( RECV_FILE_DATA ), 1, g_pfRecvFile );
 
-		if (RecvSt != 1) {
-			if (feof( g_pfRecvFile ) != 0) {
-				rc = NORMAL;
-				break;
-			}
-			else{
-				sprintf(g_szDtlMsg,"営業店コンタクト履歴ファイル(%s)の読込に失敗しました。",g_szRecvFile);
-				send_err ( m$file_read, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        if (RecvSt != 1) {
+            if (feof( g_pfRecvFile ) != 0) {
+                rc = NORMAL;
+                break;
+            }
+            else{
+                sprintf(g_szDtlMsg,"営業店コンタクト履歴ファイル(%s)の読込に失敗しました。",g_szRecvFile);
+                send_err ( m$file_read, -1, g_szDtlMsg, NULL, NULL, G_STATION);
 
-				rc = ERROR;
-				break;
-			}
-		}
-		else{
-			rc = NORMAL;
-		}
+                rc = ERROR;
+                break;
+            }
+        }
+        else{
+            rc = NORMAL;
+        }
 
         dCount.iRecNum++;
 
         g_ContactSeqNo++;
         /* １万レコード毎にメッセージ出力 */
         if ( (dCount.iRecNum % 10000) == 0 ){
-			sprintf ( g_szDtlMsg ,"[%d]レコード処理完了。。。", dCount.iRecNum);
-			send_err ( m$message1, 0, g_szDtlMsg, NULL, NULL, G_STATION);
+            sprintf ( g_szDtlMsg ,"[%d]レコード処理完了。。。", dCount.iRecNum);
+            send_err ( m$message1, 0, g_szDtlMsg, NULL, NULL, G_STATION);
         }
 
         /* ------------------------------------------ */
@@ -351,7 +353,7 @@ int main( int argc, char *argv[] )
         iCommitCnt++;                      /* 差分ファイルの処理件数 */
 
 #if 0
-		/* 再ランできないのでここでのCOMMITを削除 */
+        /* 再ランできないのでここでのCOMMITを削除 */
         /* 指定件数に到達したらＤＢのコミット */
 /*
         if (iCommitCnt == g_iCommitSU) {
@@ -381,7 +383,7 @@ WriteFile:
             dCount.iDelNumW = 0;
             rollback();
             iCommitCnt = 0;
-			dCount.iNgNum++;
+            dCount.iNgNum++;
         }
 
         /* ログ出力 */
@@ -393,8 +395,8 @@ WriteFile:
 
 
     if( rc == NORMAL && dCount.iRecNum == 0 ){
-		sprintf ( g_szDtlMsg, "営業店コンタクト履歴ファイル(%s)は０件ファイルです。", g_szRecvFile );
-		send_err (m$message1, NORMAL, g_szDtlMsg, NULL, NULL, G_STATION);
+        sprintf ( g_szDtlMsg, "営業店コンタクト履歴ファイル(%s)は０件ファイルです。", g_szRecvFile );
+        send_err (m$message1, NORMAL, g_szDtlMsg, NULL, NULL, G_STATION);
     }
 
 
@@ -420,13 +422,13 @@ WriteFile:
 
 ENDPROC:
 
-	if ( rc == NORMAL ) {
+    if ( rc == NORMAL ) {
         send_err( m$stop_process, NORMAL, process_name, "", "", G_STATION );
     } else {
         send_err( m$abend_process, ERROR, process_name, "", "", G_STATION );
     }
 
-	 finalize( rc, dCount.iRecNum, dCount.iOkNum );
+     finalize( rc, dCount.iRecNum, dCount.iOkNum );
 }
 
 
@@ -461,8 +463,8 @@ ENDPROC:
 /*                                                                           */
 /*****************************************************************************/
 static void initialize( int ac, char *av[] )
-{	
-	int exit_code=NORMAL;
+{   
+    int exit_code=NORMAL;
 
     /* コミット件数の取得 */
     g_iCommitSU = 100;
@@ -473,37 +475,37 @@ static void initialize( int ac, char *av[] )
         strcpy(g_szLogFile,   av[2]); /* 処理結果ファイル                      */
     }
     else {
-		sprintf (g_szDtlMsg,"営業店コンタクト履歴ファイル 処理結果ファイル");
-		send_err (m$invalid_parameter, ERROR, g_szDtlMsg, NULL, NULL, G_STATION);
-		exit_code = ERROR;
-		goto initialize_end;
+        sprintf (g_szDtlMsg,"営業店コンタクト履歴ファイル 処理結果ファイル");
+        send_err (m$invalid_parameter, ERROR, g_szDtlMsg, NULL, NULL, G_STATION);
+        exit_code = ERROR;
+        goto initialize_end;
 
     }
 
     /* 差分更新ファイルのオープン */
     if(( g_pfRecvFile = fopen( g_szRecvFile, "r" )) == NULL ) {
-		sprintf( g_szDtlMsg, "ファイル%sのオープンに失敗しました。", g_szRecvFile );
-		send_err( m$file_open, errno, g_szDtlMsg, NULL, NULL, G_STATION );
-		exit_code = ERROR;
-		goto initialize_end;
+        sprintf( g_szDtlMsg, "ファイル%sのオープンに失敗しました。", g_szRecvFile );
+        send_err( m$file_open, errno, g_szDtlMsg, NULL, NULL, G_STATION );
+        exit_code = ERROR;
+        goto initialize_end;
     }
-	file_open_flag1 =1;
+    file_open_flag1 =1;
 
     /* 処理結果ファイルへのオープン */
     if (( g_pfLogFile = fopen( g_szLogFile, "w" )) == NULL ) {
-		sprintf( g_szDtlMsg, "ファイル%sのオープンに失敗しました。", g_szLogFile );
-		send_err( m$file_open, errno, g_szDtlMsg, NULL, NULL, G_STATION );
-		exit_code = ERROR;
-		goto initialize_end;
+        sprintf( g_szDtlMsg, "ファイル%sのオープンに失敗しました。", g_szLogFile );
+        send_err( m$file_open, errno, g_szDtlMsg, NULL, NULL, G_STATION );
+        exit_code = ERROR;
+        goto initialize_end;
     }
-	file_open_flag2 =1;
+    file_open_flag2 =1;
 
 initialize_end:
 
-	if ( exit_code != NORMAL ) {
-		send_err( m$abend_process, ERROR, process_name, "", "", G_STATION );
-		exit ( exit_code );    
-	}
+    if ( exit_code != NORMAL ) {
+        send_err( m$abend_process, ERROR, process_name, "", "", G_STATION );
+        exit ( exit_code );    
+    }
 
 }
 
@@ -570,7 +572,7 @@ static int checkFilles( RECV_FILE_DATA *pData, char *g_szDtlMsg )
     memset( h_TenNo, 0x00, sizeof(h_TenNo) );
     hi_TenNo=ORA_NULL;
     
-	/* センタID %01 Add */
+    /* センタID %01 Add */
     memset( h_CenterId, 0x00, sizeof(h_CenterId) );
     hi_CenterId=ORA_NULL;
 
@@ -613,7 +615,7 @@ static int checkFilles( RECV_FILE_DATA *pData, char *g_szDtlMsg )
     hi_GyomuType=ORA_NOT_NULL;
 
     /* 枝番 */
-	h_EdaNo = 0;
+    h_EdaNo = 0;
     hi_EdaNo=ORA_NULL;
 
     /* 登録者 */
@@ -687,7 +689,7 @@ static int checkFilles( RECV_FILE_DATA *pData, char *g_szDtlMsg )
     }
 
     /* TH_営業店履歴テーブル確認 */
-	G_POSITION = __LINE__;
+    G_POSITION = __LINE__;
     EXEC SQL SELECT コンタクトID, 枝番 INTO :h_ContactID, :h_EdaNo
         FROM TH_営業店履歴
         WHERE 営業店日報ID = :h_NippoID
@@ -708,7 +710,7 @@ static int checkFilles( RECV_FILE_DATA *pData, char *g_szDtlMsg )
                  "[営業店日報ID=%s 担当者ID=%s]TH_営業店履歴テーブルの検索に失敗しました。(sqlca.sqlcode=%d)",
                   h_NippoID, h_UserID, sqlca.sqlcode );
         send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
-		send_err ( m$sql_statment, sqlca.sqlcode, "SELECT TH_営業店履歴", NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "SELECT TH_営業店履歴", NULL, NULL, G_STATION);
         return(ERROR);
     }
     else if (sqlca.sqlcode == 0){
@@ -755,11 +757,11 @@ static int checkFilles( RECV_FILE_DATA *pData, char *g_szDtlMsg )
         memcpy( h_TenNo, pData->ten_no, sizeof(pData->ten_no) );
         rtrim( h_TenNo );
         hi_TenNo=ORA_NOT_NULL;
-		
-		/* センタID 先頭に0を付加 %01 */
-		h_CenterId[0] = '0';
-		memcpy( &h_CenterId[1], h_TenNo, strlen(h_TenNo) );
-		hi_CenterId = ORA_NOT_NULL;
+        
+        /* センタID 先頭に0を付加 %01 */
+        h_CenterId[0] = '0';
+        memcpy( &h_CenterId[1], h_TenNo, strlen(h_TenNo) );
+        hi_CenterId = ORA_NOT_NULL;
 
     }
     else {
@@ -824,7 +826,7 @@ static int checkFilles( RECV_FILE_DATA *pData, char *g_szDtlMsg )
     /* 処理区分 新規の場合 */
     if ( atoi(g_RecordID) == AP_C_SYORI_NEW ){
         /* TF_顧客属性テーブルの確認 */
-		G_POSITION = __LINE__;
+        G_POSITION = __LINE__;
         EXEC SQL SELECT 店番 INTO :h_svTenNo :hi_svTenNo
             FROM TF_顧客属性
             WHERE CIFNO = :h_CIFNO
@@ -833,7 +835,7 @@ static int checkFilles( RECV_FILE_DATA *pData, char *g_szDtlMsg )
             sprintf( g_szDtlMsg,
                      "[営業店日報ID=%s 担当者ID=%s CIFNO=%s]TF_顧客属性テーブルに存在しないデータです。",
                       h_NippoID, h_UserID, h_CIFNO);
-            send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);			
+            send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);         
             return(ERROR);
         }
         else if (sqlca.sqlcode != 0){
@@ -841,7 +843,7 @@ static int checkFilles( RECV_FILE_DATA *pData, char *g_szDtlMsg )
                      "[営業店日報ID=%s 担当者ID=%s CIFNO=%s]TF_顧客属性テーブルの検索に失敗しました。(sqlca.sqlcode=%d)",
                       h_NippoID, h_UserID, h_CIFNO, sqlca.sqlcode );
             send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
-			send_err ( m$sql_statment, sqlca.sqlcode, "SELECT TF_顧客属性", NULL, NULL, G_STATION);
+            send_err ( m$sql_statment, sqlca.sqlcode, "SELECT TF_顧客属性", NULL, NULL, G_STATION);
             return(ERROR);
         }
     }
@@ -962,7 +964,7 @@ static int insertTables( char *g_szDtlMsg )
     /* --------------------------- */
     /* TH_営業店履歴テーブルの登録 */
     /* --------------------------- */
-	G_POSITION = __LINE__;
+    G_POSITION = __LINE__;
     EXEC SQL INSERT INTO TH_営業店履歴
         (   コンタクトID,
             枝番,
@@ -1001,14 +1003,14 @@ static int insertTables( char *g_szDtlMsg )
                  "TH_営業店履歴テーブルの登録に失敗しました。(sqlca.sqlcode=%d)",
                  sqlca.sqlcode );
         send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
-		send_err ( m$sql_statment, sqlca.sqlcode, "INSERT TH_営業店履歴", NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "INSERT TH_営業店履歴", NULL, NULL, G_STATION);
         return ERROR;
     }
 
     /* ------------------------------- */
     /* TH_コンタクト履歴テーブルの登録 */
     /* ------------------------------- */
-	G_POSITION = __LINE__;
+    G_POSITION = __LINE__;
     EXEC SQL INSERT INTO TH_コンタクト履歴
        (   コンタクトID,
            コール日時,
@@ -1028,7 +1030,7 @@ static int insertTables( char *g_szDtlMsg )
         )  VALUES (
             :h_ContactID,
             TO_DATE(:h_Timestamp :hi_Timestamp,'YYYYMMDDHH24MISS'),
-            :h_CenterId :hi_CenterId,				/* %01 Change */
+            :h_CenterId :hi_CenterId,               /* %01 Change */
             '9999',
             '営業店',
             '0001',
@@ -1037,7 +1039,7 @@ static int insertTables( char *g_szDtlMsg )
             0,
             :h_GyomuType :hi_GyomuType,
             :h_UserID :hi_UserID,
-            :h_CenterId :hi_CenterId,				/* %01 Change */
+            :h_CenterId :hi_CenterId,               /* %01 Change */
             '9',
             SYSDATE,
             :h_ChangeName
@@ -1047,14 +1049,14 @@ static int insertTables( char *g_szDtlMsg )
                  "TH_コンタクト履歴テーブルの登録に失敗しました。(sqlca.sqlcode=%d)",
                  sqlca.sqlcode );
         send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
-		send_err ( m$sql_statment, sqlca.sqlcode, "INSERT TH_コンタクト履歴", NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "INSERT TH_コンタクト履歴", NULL, NULL, G_STATION);
         return ERROR;
     }
 
     /* ------------------------------- */
     /* TH_コンタクト属性テーブルの登録 */
     /* ------------------------------- */
-	G_POSITION = __LINE__;
+    G_POSITION = __LINE__;
     EXEC SQL INSERT INTO TH_コンタクト属性
        (   コンタクトID,
            店番,
@@ -1073,14 +1075,14 @@ static int insertTables( char *g_szDtlMsg )
                  "TH_コンタクト属性テーブルの登録に失敗しました。(sqlca.sqlcode=%d)",
                  sqlca.sqlcode );
         send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
-		send_err ( m$sql_statment, sqlca.sqlcode, "INSERT TH_コンタクト属性", NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "INSERT TH_コンタクト属性", NULL, NULL, G_STATION);
         return ERROR;
     }
 
     /* ----------------------------- */
     /* TH_サービスログテーブルの登録 */
     /* ----------------------------- */
-	G_POSITION = __LINE__;
+    G_POSITION = __LINE__;
     EXEC SQL INSERT INTO TH_サービスログ
        (   コンタクトID,
            枝番,
@@ -1100,7 +1102,7 @@ static int insertTables( char *g_szDtlMsg )
             :h_CIFNO :hi_CIFNO,
             '10',
             :h_UserID :hi_UserID,
-            :h_CenterId :hi_CenterId,		/* %01 */
+            :h_CenterId :hi_CenterId,       /* %01 */
             SYSDATE,
             :h_ChangeName
         );
@@ -1109,7 +1111,7 @@ static int insertTables( char *g_szDtlMsg )
                  "TH_サービスログテーブルの登録に失敗しました。(sqlca.sqlcode=%d)",
                  sqlca.sqlcode );
         send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
-		send_err ( m$sql_statment, sqlca.sqlcode, "INSERT TH_サービスログ", NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "INSERT TH_サービスログ", NULL, NULL, G_STATION);
         return ERROR;
     }
 
@@ -1151,10 +1153,10 @@ static int updateTables( char *g_szDtlMsg )
     /* --------------------------- */
     /* TH_営業店履歴テーブルの更新 */
     /* --------------------------- */
-	/* %02 Change */
+    /* %02 Change */
     G_POSITION = __LINE__;
     EXEC SQL UPDATE TH_営業店履歴 
-		SET
+        SET
             登録日時 = :h_UpdateTime :hi_UpdateTime,
             取扱店 = :h_TenNo :hi_TenNo,
             受付区分 = :h_UketsukeType :hi_UketsukeType,
@@ -1165,15 +1167,15 @@ static int updateTables( char *g_szDtlMsg )
             金額 =TO_NUMBER(:h_Kingaku :hi_Kingaku, '999999999999'),
             登録者 = :h_ChangeName,
             登録日 = SYSDATE 
-		WHERE
-			コンタクトID  = :h_ContactID
-			AND 枝番 = :h_EdaNo
-		;
-	
-	if (sqlca.sqlcode != 0){
+        WHERE
+            コンタクトID  = :h_ContactID
+            AND 枝番 = :h_EdaNo
+        ;
+    
+    if (sqlca.sqlcode != 0){
         sprintf( g_szDtlMsg, "TH_営業店履歴テーブル更新エラー(sqlca.sqlcode=%d)", sqlca.sqlcode );
         send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
-		send_err ( m$sql_statment, sqlca.sqlcode, "UPDATE TH_営業店履歴", NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "UPDATE TH_営業店履歴", NULL, NULL, G_STATION);
         return(ERROR);
     }
 
@@ -1199,16 +1201,16 @@ static int updateTables( char *g_szDtlMsg )
     strcat( sqlcmd, h_ContactID );
     strcat( sqlcmd, "' AND " );
     strcat( sqlcmd, "枝番= " );
-	sprintf( g_work, "%d",h_EdaNo );
-	strcat( sqlcmd, g_work );
+    sprintf( g_work, "%d",h_EdaNo );
+    strcat( sqlcmd, g_work );
     /*strcat( sqlcmd, h_EdaNo );*/
 
-	G_POSITION = __LINE__;
+    G_POSITION = __LINE__;
     EXEC SQL EXECUTE IMMEDIATE :sqlcmd ;
     if (sqlca.sqlcode != 0){
         sprintf( g_szDtlMsg, "TH_営業店履歴テーブル更新エラー(sqlca.sqlcode=%d)", sqlca.sqlcode );
         send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
-		send_err ( m$sql_statment, sqlca.sqlcode, "UPDATE TH_営業店履歴", NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "UPDATE TH_営業店履歴", NULL, NULL, G_STATION);
         return(ERROR);
     }
 #endif
@@ -1219,26 +1221,26 @@ static int updateTables( char *g_szDtlMsg )
     /* ------------------------------- */
     /* TH_コンタクト履歴テーブルの更新 */
     /* ------------------------------- */
-	/* %02 Change */
+    /* %02 Change */
     G_POSITION = __LINE__;
     EXEC SQL UPDATE TH_コンタクト履歴 
-		SET
+        SET
            コール日時 = TO_DATE(:h_Timestamp :hi_Timestamp,'YYYYMMDDHH24MISS'),
-           キャンペーンセンタID = :h_CenterId :hi_CenterId,	
+           キャンペーンセンタID = :h_CenterId :hi_CenterId, 
            切電日時 = TO_DATE(:h_Timestamp :hi_Timestamp,'YYYYMMDDHH24MISS'),
            受付ユーザID = :h_UserID :hi_UserID,
-           受付センタID = :h_CenterId :hi_CenterId,	
-		   登録日 = SYSDATE,
-		   登録者 = :h_ChangeName
-		WHERE
-			コンタクトID  = :h_ContactID
-		;
+           受付センタID = :h_CenterId :hi_CenterId, 
+           登録日 = SYSDATE,
+           登録者 = :h_ChangeName
+        WHERE
+            コンタクトID  = :h_ContactID
+        ;
 
 
-	if (sqlca.sqlcode != 0){
+    if (sqlca.sqlcode != 0){
         sprintf( g_szDtlMsg, "TH_コンタクト履歴テーブル更新エラー(sqlca.sqlcode=%d)", sqlca.sqlcode );
         send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
-		send_err ( m$sql_statment, sqlca.sqlcode, "UPDATE TH_コンタクト履歴", NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "UPDATE TH_コンタクト履歴", NULL, NULL, G_STATION);
         return(ERROR);
     }
 
@@ -1247,10 +1249,10 @@ static int updateTables( char *g_szDtlMsg )
     strcpy( sqlcmd, "UPDATE TH_コンタクト履歴 SET ");
 
     setUpdateText( 2, sqlcmd, hi_Timestamp, "コール日時", h_Timestamp);
-    setUpdateText( 1, sqlcmd, hi_CenterId, "キャンペーンセンタID", h_CenterId);	/* %01 */
+    setUpdateText( 1, sqlcmd, hi_CenterId, "キャンペーンセンタID", h_CenterId); /* %01 */
     setUpdateText( 2, sqlcmd, hi_Timestamp, "切電日時", h_Timestamp);
     setUpdateText( 1, sqlcmd, hi_UserID, "受付ユーザID", h_UserID);
-    setUpdateText( 1, sqlcmd, hi_CenterId, "受付センタID", h_CenterId);			/* %01 */
+    setUpdateText( 1, sqlcmd, hi_CenterId, "受付センタID", h_CenterId);         /* %01 */
 
     strcat( sqlcmd, "登録者='" );
     strcat( sqlcmd, h_ChangeName );
@@ -1261,12 +1263,12 @@ static int updateTables( char *g_szDtlMsg )
     strcat( sqlcmd, h_ContactID );
     strcat( sqlcmd, "'" );
 
-	G_POSITION = __LINE__;
+    G_POSITION = __LINE__;
     EXEC SQL EXECUTE IMMEDIATE :sqlcmd ;
     if (sqlca.sqlcode != 0){
         sprintf( g_szDtlMsg, "TH_コンタクト履歴テーブル更新エラー(sqlca.sqlcode=%d)", sqlca.sqlcode );
         send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
-		send_err ( m$sql_statment, sqlca.sqlcode, "UPDATE TH_コンタクト履歴", NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "UPDATE TH_コンタクト履歴", NULL, NULL, G_STATION);
         return(ERROR);
     }
 #endif
@@ -1276,22 +1278,22 @@ static int updateTables( char *g_szDtlMsg )
     /* ------------------------------- */
     /* TH_コンタクト属性テーブルの更新 */
     /* ------------------------------- */
-	/* %02 Change */
+    /* %02 Change */
     G_POSITION = __LINE__;
     EXEC SQL UPDATE TH_コンタクト属性 
-		SET
+        SET
            店番 = :h_TenNo :hi_TenNo,
            CIFNO = :h_CIFNO :hi_CIFNO,
-		   登録日 = SYSDATE,
-		   登録者 = :h_ChangeName
-		WHERE
-			コンタクトID  = :h_ContactID
-		;
+           登録日 = SYSDATE,
+           登録者 = :h_ChangeName
+        WHERE
+            コンタクトID  = :h_ContactID
+        ;
 
-	if (sqlca.sqlcode != 0){
+    if (sqlca.sqlcode != 0){
         sprintf( g_szDtlMsg, "TH_コンタクト属性テーブル更新エラー(sqlca.sqlcode=%d)", sqlca.sqlcode );
         send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
-		send_err ( m$sql_statment, sqlca.sqlcode, "UPDATE TH_コンタクト属性", NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "UPDATE TH_コンタクト属性", NULL, NULL, G_STATION);
         return(ERROR);
     }
 
@@ -1311,11 +1313,11 @@ static int updateTables( char *g_szDtlMsg )
     strcat( sqlcmd, "'" );
 
     G_POSITION = __LINE__;
-	EXEC SQL EXECUTE IMMEDIATE :sqlcmd ;
+    EXEC SQL EXECUTE IMMEDIATE :sqlcmd ;
     if (sqlca.sqlcode != 0){
         sprintf( g_szDtlMsg, "TH_コンタクト属性テーブル更新エラー(sqlca.sqlcode=%d)", sqlca.sqlcode );
         send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
-		send_err ( m$sql_statment, sqlca.sqlcode, "UPDATE TH_コンタクト属性", NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "UPDATE TH_コンタクト属性", NULL, NULL, G_STATION);
         return(ERROR);
     }
 #endif
@@ -1325,10 +1327,10 @@ static int updateTables( char *g_szDtlMsg )
     /* ----------------------------- */
     /* TH_サービスログテーブルの更新 */
     /* ----------------------------- */
-	/* %02 Change */
+    /* %02 Change */
     G_POSITION = __LINE__;
     EXEC SQL UPDATE TH_サービスログ 
-		SET
+        SET
            受付日時 = TO_DATE(:h_Timestamp :hi_Timestamp,'YYYYMMDDHH24MISS'),
            店番 = :h_TenNo :hi_TenNo,
            CIFNO = :h_CIFNO :hi_CIFNO,
@@ -1336,15 +1338,15 @@ static int updateTables( char *g_szDtlMsg )
            受付センタID = :h_CenterId :hi_CenterId,
            登録日 = SYSDATE,
            登録者 = :h_ChangeName 
-		WHERE
-			コンタクトID  = :h_ContactID
-		AND 枝番 = :h_EdaNo
-		;
+        WHERE
+            コンタクトID  = :h_ContactID
+        AND 枝番 = :h_EdaNo
+        ;
 
-	if (sqlca.sqlcode != 0){
+    if (sqlca.sqlcode != 0){
         sprintf( g_szDtlMsg, "TH_サービスログテーブル更新エラー(sqlca.sqlcode=%d)", sqlca.sqlcode );
         send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
-		send_err ( m$sql_statment, sqlca.sqlcode, "UPDATE TH_サービスログ", NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "UPDATE TH_サービスログ", NULL, NULL, G_STATION);
         return(ERROR);
     }
 
@@ -1355,7 +1357,7 @@ static int updateTables( char *g_szDtlMsg )
     setUpdateText( 1, sqlcmd, hi_TenNo, "店番", h_TenNo);
     setUpdateText( 1, sqlcmd, hi_CIFNO, "CIFNO", h_CIFNO);
     setUpdateText( 1, sqlcmd, hi_UserID, "受付ユーザID", h_UserID);
-    setUpdateText( 1, sqlcmd, hi_CenterId, "受付センタID", h_CenterId);	/* %01 */
+    setUpdateText( 1, sqlcmd, hi_CenterId, "受付センタID", h_CenterId); /* %01 */
 
     strcat( sqlcmd, "登録者='" );
     strcat( sqlcmd, h_ChangeName );
@@ -1366,16 +1368,16 @@ static int updateTables( char *g_szDtlMsg )
     strcat( sqlcmd, h_ContactID );
     strcat( sqlcmd, "' AND " );
     strcat( sqlcmd, "枝番= " );
-	sprintf( g_work, "%d",h_EdaNo );
-	strcat( sqlcmd, g_work );
+    sprintf( g_work, "%d",h_EdaNo );
+    strcat( sqlcmd, g_work );
     /*strcat( sqlcmd, h_EdaNo );*/
 
     G_POSITION = __LINE__;
-	EXEC SQL EXECUTE IMMEDIATE :sqlcmd ;
+    EXEC SQL EXECUTE IMMEDIATE :sqlcmd ;
     if (sqlca.sqlcode != 0){
         sprintf( g_szDtlMsg, "TH_サービスログテーブル更新エラー(sqlca.sqlcode=%d)", sqlca.sqlcode );
         send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
-		send_err ( m$sql_statment, sqlca.sqlcode, "UPDATE TH_サービスログ", NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "UPDATE TH_サービスログ", NULL, NULL, G_STATION);
         return(ERROR);
     }
 #endif
@@ -1487,7 +1489,7 @@ static int deleteTables( char *g_szDtlMsg )
     /* --------------------------- */
     /* TH_営業店履歴テーブルの削除 */
     /* --------------------------- */
-	G_POSITION = __LINE__;
+    G_POSITION = __LINE__;
     EXEC SQL DELETE FROM TH_営業店履歴
         WHERE コンタクトID = :h_ContactID
           AND 枝番 = :h_EdaNo;
@@ -1496,14 +1498,14 @@ static int deleteTables( char *g_szDtlMsg )
                  "TH_営業店履歴テーブルの削除に失敗しました。(sqlca.sqlcode=%d)",
                  sqlca.sqlcode );
         send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
-		send_err ( m$sql_statment, sqlca.sqlcode, "DELETE TH_営業店履歴", NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "DELETE TH_営業店履歴", NULL, NULL, G_STATION);
         return ERROR;
     }
 
     /* ------------------------------- */
     /* TH_コンタクト履歴テーブルの削除 */
     /* ------------------------------- */
-	G_POSITION = __LINE__;
+    G_POSITION = __LINE__;
     EXEC SQL DELETE FROM TH_コンタクト履歴
         WHERE コンタクトID = :h_ContactID;
     if (sqlca.sqlcode != 0){
@@ -1511,7 +1513,7 @@ static int deleteTables( char *g_szDtlMsg )
                  "TH_コンタクト履歴テーブルの削除に失敗しました。(sqlca.sqlcode=%d)",
                  sqlca.sqlcode );
         send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
-		send_err ( m$sql_statment, sqlca.sqlcode, "DELETE TH_コンタクト履歴", NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "DELETE TH_コンタクト履歴", NULL, NULL, G_STATION);
         return ERROR;
     }
 
@@ -1525,14 +1527,14 @@ static int deleteTables( char *g_szDtlMsg )
                  "TH_コンタクト属性テーブルの削除に失敗しました。(sqlca.sqlcode=%d)",
                  sqlca.sqlcode );
         send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
-		send_err ( m$sql_statment, sqlca.sqlcode, "DELETE TH_コンタクト属性", NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "DELETE TH_コンタクト属性", NULL, NULL, G_STATION);
         return ERROR;
     }
 
     /* ----------------------------- */
     /* TH_サービスログテーブルの削除 */
     /* ----------------------------- */
-	G_POSITION = __LINE__;
+    G_POSITION = __LINE__;
     EXEC SQL DELETE FROM TH_サービスログ
         WHERE コンタクトID = :h_ContactID
           AND 枝番 = :h_EdaNo;
@@ -1541,7 +1543,7 @@ static int deleteTables( char *g_szDtlMsg )
                  "TH_サービスログテーブルの削除に失敗しました。(sqlca.sqlcode=%d)",
                  sqlca.sqlcode );
         send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
-		send_err ( m$sql_statment, sqlca.sqlcode, "DELETE TH_サービスログ", NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "DELETE TH_サービスログ", NULL, NULL, G_STATION);
         return ERROR;
     }
 
@@ -1599,7 +1601,7 @@ static int putAcctLogFile(int tp, RECV_FILE_DATA *pData, COUNT *dCount, int rc,
                  dCount->iInsNum,                    /* 正常終了（新規登録） */
                  dCount->iUpdNum,                    /* 正常終了（更新）     */
                  dCount->iDelNum,                    /* 正常終了（削除）     */
-                 dCount->iNgNum );					 /* ERROR終了            */
+                 dCount->iNgNum );                   /* ERROR終了            */
 
         /* 処理結果ファイルへの書き込み */
         if ( fwrite( &log, sizeof(AP_D_BTLOG) - sizeof(log.szNote1) - sizeof(log.szDelimit1),
@@ -1607,17 +1609,17 @@ static int putAcctLogFile(int tp, RECV_FILE_DATA *pData, COUNT *dCount, int rc,
             send_err ( m$file_write, errno, g_szLogFile, log , NULL, G_STATION);
             return ERROR;
         }
-		
-		sprintf ( g_szDtlMsg,
-				"[ RECORD COUNT:%d <OK>:%d (INS:%d UPD:%d DEL:%d ) <NG>:%d ]",
+        
+        sprintf ( g_szDtlMsg,
+                "[ RECORD COUNT:%d <OK>:%d (INS:%d UPD:%d DEL:%d ) <NG>:%d ]",
                  dCount->iRecNum,                    /* 処理件数             */
                  dCount->iOkNum,                     /* 正常終了             */
                  dCount->iInsNum,                    /* 正常終了（新規登録） */
                  dCount->iUpdNum,                    /* 正常終了（更新）     */
                  dCount->iDelNum,                    /* 正常終了（削除）     */
-                 dCount->iNgNum );					 /* ERROR終了            */
+                 dCount->iNgNum );                   /* ERROR終了            */
 
-		send_err (  m$message1, NORMAL, g_szDtlMsg, NULL , NULL, G_STATION);
+        send_err (  m$message1, NORMAL, g_szDtlMsg, NULL , NULL, G_STATION);
 
 
     }else{
@@ -1742,7 +1744,7 @@ static int commit( void )
 static int rollback( )
 {
     
-	/* ＤＢのロールバック */
+    /* ＤＢのロールバック */
     EXEC SQL ROLLBACK WORK;
     if (sqlca.sqlcode < 0) {
         sprintf(g_szDtlMsg,
@@ -1785,12 +1787,12 @@ static void finalize( int rc, int iRecNum, int iOkNum )
 {
 
     /* ファイルのクローズ */
-	if ( file_open_flag1 == 1 ) {
-		fclose( g_pfRecvFile );
-	}
-	if ( file_open_flag2 == 1 ) {
-		fclose( g_pfLogFile );
-	}
+    if ( file_open_flag1 == 1 ) {
+        fclose( g_pfRecvFile );
+    }
+    if ( file_open_flag2 == 1 ) {
+        fclose( g_pfLogFile );
+    }
 
     /* ＤＢ接続解除 */
 /*
@@ -1847,7 +1849,7 @@ static int rpWord ( char *pData )
 
     len = (unsigned int)strlen( pData );
     for ( i = len - 1; i >= 0; i-- ) {
-		if ( pData[i] == 0x27 ) { /* '(シングルクォート) */
+        if ( pData[i] == 0x27 ) { /* '(シングルクォート) */
             pData[i] = 0x20;     /* スペース            */
             rc = ERROR; 
         }
