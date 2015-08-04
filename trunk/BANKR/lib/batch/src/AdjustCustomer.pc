@@ -189,7 +189,8 @@ main()
 		SET 
 			連絡先住所コード = '00000000000'
 		WHERE 
-			NOT EXISTS (
+			TF_顧客属性.連絡先住所コード IS NOT NULL
+			AND NOT EXISTS (
 				SELECT
 					*
 				FROM
