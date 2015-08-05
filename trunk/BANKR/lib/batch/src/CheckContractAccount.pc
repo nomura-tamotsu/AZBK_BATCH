@@ -37,6 +37,7 @@
 /*     |          |             | 口座番号に変更（１０次ではCIF≠口座番号） */
 /* %07 | 15/03/24 | 土居 康一郎 | ITa_019 流動性預金科目誤り修正 1211→1221 */
 /* %08 | 15/04/02 | 土居 康一郎 | ITa_040 投信検索時、キーに口座番号追加    */
+/* %09 | 15/07/30 | 東   淳史   | ITb_015 定期・仕組の対象科目を2000を追加  */
 /*==========================================================================*/
 /*****************************************************************************/
 /*---------------------------------------------------------------------------*/
@@ -476,7 +477,10 @@ static int AddAccountTeiki()
 	EXEC SQL DECLARE CUR_TEI CURSOR FOR
         SELECT DISTINCT 店番, CIFNO, 科目ID, 口座番号, 仕組預金
           FROM TF_個別明細固定性預金
-         WHERE 科目ID IN ('2011', '2012', '2021', '2098')
+/* %09 Edit START */
+//         WHERE 科目ID IN ('2011', '2012', '2021', '2098')
+         WHERE 科目ID IN ('2000', '2011', '2012', '2021', '2098')
+/* %09 Edit End */
            AND 枝番号 = '0000000'
        ;
 
@@ -573,16 +577,33 @@ static int AddAccountTeiki()
 //            } else if( strncmp( h_AccntType, "203900", 6 ) == 0 ){
 //                strcpy( h_AccntType_wk, LOADING_ACCNT_TYPE_SI );
 //            }
+
+/* %09 Edit START */
+//            if( ( strncmp( h_AccntType, "2011", 4 ) == 0 &&
+//                  strncmp( h_ShikumiFlag, "0", 1 ) == 0) ||
+//                strncmp( h_AccntType, "2012", 4 ) == 0 ||
+//                strncmp( h_AccntType, "2021", 4 ) == 0 ||
+//                strncmp( h_AccntType, "2098", 4 ) == 0 ){
+//                strcpy( h_AccntType_wk, LOADING_ACCNT_TYPE_TK );
+//            } else if( strncmp( h_AccntType, "2011", 4 ) == 0 &&
+//                strncmp( h_ShikumiFlag, "1", 1 ) == 0){
+//                strcpy( h_AccntType_wk, LOADING_ACCNT_TYPE_SI );
+//            }
             if( ( strncmp( h_AccntType, "2011", 4 ) == 0 &&
                   strncmp( h_ShikumiFlag, "0", 1 ) == 0) ||
                 strncmp( h_AccntType, "2012", 4 ) == 0 ||
                 strncmp( h_AccntType, "2021", 4 ) == 0 ||
-                strncmp( h_AccntType, "2098", 4 ) == 0 ){
+                strncmp( h_AccntType, "2098", 4 ) == 0 ||
+                ( strncmp( h_AccntType, "2000", 4 ) == 0 &&
+                  strncmp( h_ShikumiFlag, "0", 1 ) == 0)){
                 strcpy( h_AccntType_wk, LOADING_ACCNT_TYPE_TK );
-            } else if( strncmp( h_AccntType, "2011", 4 ) == 0 &&
-                strncmp( h_ShikumiFlag, "1", 1 ) == 0){
+            } else if( ( strncmp( h_AccntType, "2011", 4 ) == 0 &&
+                strncmp( h_ShikumiFlag, "1", 1 ) == 0) ||
+                ( strncmp( h_AccntType, "2000", 4 ) == 0 &&
+                strncmp( h_ShikumiFlag, "1", 1 ) == 0)){
                 strcpy( h_AccntType_wk, LOADING_ACCNT_TYPE_SI );
             }
+/* %09 Edit End */
 
 //            /* 口番号変換 */
 //			rtrim ( h_AccntSubNo ); /* Add */
@@ -1657,7 +1678,10 @@ static int checkDelAccount()
             strcat( sqltext, "口座番号='");
             strcat( sqltext, h_AccntNo);
 /* %06 Edit End  */
-            strcat( sqltext, "' AND 科目ID IN ('2011','2012','2021','2098') " );
+/* %09 Edit START  */
+//            strcat( sqltext, "' AND 科目ID IN ('2011','2012','2021','2098') " );
+            strcat( sqltext, "' AND 科目ID IN ('2000','2011','2012','2021','2098') " );
+/* %09 Edit End  */
             strcat( sqltext, " AND 仕組預金='0'" );
         }
         /* 仕組預金 */
@@ -1672,7 +1696,10 @@ static int checkDelAccount()
             strcat( sqltext, "口座番号='");
             strcat( sqltext, h_AccntNo);
 /* %06 Edit End  */
-            strcat( sqltext, "' AND 科目ID='2011'" );
+/* %09 Edit START  */
+//            strcat( sqltext, "' AND 科目ID='2011'" );
+            strcat( sqltext, "' AND 科目ID IN ('2000','2011') " );
+/* %09 Edit End  */
             strcat( sqltext, " AND 仕組預金='1'" );
         }
 /* %03 Edit End  */
