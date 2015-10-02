@@ -26,8 +26,8 @@ CREATE OR REPLACE VIEW TF_個別明細投信口座明細
     ,純資産
     ,個別元本
     ,取得金額
-    ,標準価額
     ,解約価額
+    ,標準価額
     ,当初取引日
     ,最近取引日
     ,取扱店合計
@@ -47,8 +47,8 @@ CREATE OR REPLACE VIEW TF_個別明細投信口座明細
     ,TF_個別明細投信口座明細A.純資産
     ,TF_個別明細投信口座明細A.個別元本
     ,TF_個別明細投信口座明細A.取得金額
-    ,TF_個別明細投信口座明細A.標準価額
     ,TF_個別明細投信口座明細A.解約価額
+    ,TF_個別明細投信口座明細A.標準価額
     ,TF_個別明細投信口座明細A.当初取引日
     ,TF_個別明細投信口座明細A.最近取引日
     ,TF_個別明細投信口座明細A.取扱店合計
@@ -68,8 +68,8 @@ COMMENT ON COLUMN TF_個別明細投信口座明細.数量 IS 'ZZZZZZZZZZZZZZ9.00';
 COMMENT ON COLUMN TF_個別明細投信口座明細.純資産 IS 'ZZZZZZZZZZZZZZ9.00';
 COMMENT ON COLUMN TF_個別明細投信口座明細.個別元本 IS 'ZZZZZZZZZZZZZZ9.00';
 COMMENT ON COLUMN TF_個別明細投信口座明細.取得金額 IS 'ZZZZZZZZZZZZZZ9.00';
-COMMENT ON COLUMN TF_個別明細投信口座明細.標準価額 IS 'ZZZZZZZZZZZZZZ9.00';
 COMMENT ON COLUMN TF_個別明細投信口座明細.解約価額 IS 'ZZZZZZZZZZZZZZ9.00';
+COMMENT ON COLUMN TF_個別明細投信口座明細.標準価額 IS 'ZZZZZZZZZZZZZZ9.00';
 COMMENT ON COLUMN TF_個別明細投信口座明細.当初取引日 IS '';
 COMMENT ON COLUMN TF_個別明細投信口座明細.最近取引日 IS '';
 COMMENT ON COLUMN TF_個別明細投信口座明細.取扱店合計 IS 'ZZZZZZZZZZZZZZ9.00';
