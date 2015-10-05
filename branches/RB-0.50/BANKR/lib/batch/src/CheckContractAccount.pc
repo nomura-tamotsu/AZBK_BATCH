@@ -1369,7 +1369,7 @@ static int checkDelAccount()
                    KOU.“X”Ô,
                    KOU.‰È–ÚID,
                    KOU.ŒûÀ”Ô†,
-                   KOU.ŒûÀŒû”Ô†,
+                   LPAD(KOU.ŒûÀŒû”Ô†, 5, '0'),
                    KOU.‘ã•\ŒûÀ‹æ•ª
               FROM TFB_ƒeƒŒƒoƒ“Œ_–ñ‘®« KEI, 
 				   TFB_ƒeƒŒƒoƒ“Œ_–ñŒûÀ KOU
@@ -1437,8 +1437,11 @@ static int checkDelAccount()
             strcat( sqltext, " WHERE “X”Ô='" );
             strcat( sqltext, h_BranchNo);
             strcat( sqltext, "' AND ");
-            strcat( sqltext, "CIFNO='");
-            strcat( sqltext, h_CIFNO);
+            strcat( sqltext, "ŒûÀ”Ô†='");
+            strcat( sqltext, h_AccntNo);
+            strcat( sqltext, "' AND ");
+            strcat( sqltext, "ŒûÀŒû”Ô†='");
+            strcat( sqltext, h_AccntSubNo);
             /* ’èŠú—a‹à */
             if( strncmp(h_AccntType, LOADING_ACCNT_TYPE_TK, 4) == 0 ){
                 strcat( sqltext, "' AND ‰È–ÚID IN ('203300', '203500') " );
@@ -1453,8 +1456,11 @@ static int checkDelAccount()
             strcat( sqltext, " WHERE “X”Ô='" );
             strcat( sqltext, h_BranchNo);
             strcat( sqltext, "' AND ");
-            strcat( sqltext, "CIFNO='");
-            strcat( sqltext, h_CIFNO);
+            strcat( sqltext, "ŒûÀ”Ô†='");
+            strcat( sqltext, h_AccntNo);
+            strcat( sqltext, "' AND ");
+            strcat( sqltext, "ŒûÀŒû”Ô†='");
+            strcat( sqltext, h_AccntSubNo);
             strcat( sqltext, "' AND ‰È–ÚID='205110' " );
         }
         /* ƒŠƒbƒVƒ“EƒƒŠƒVƒ“EƒƒCƒhE‚ ‚¨‚¼‚çSP */
@@ -1466,8 +1472,11 @@ static int checkDelAccount()
             strcat( sqltext, " WHERE “X”Ô='" );
             strcat( sqltext, h_BranchNo);
             strcat( sqltext, "' AND ");
-            strcat( sqltext, "CIFNO='");
-            strcat( sqltext, h_CIFNO);
+            strcat( sqltext, "ŒûÀ”Ô†='");
+            strcat( sqltext, h_AccntNo);
+            strcat( sqltext, "' AND ");
+            strcat( sqltext, "ŒûÀŒû”Ô†='");
+            strcat( sqltext, h_AccntSubNo);
             /*  */
             if( strncmp(h_AccntType, LOADING_ACCNT_TYPE_RI, 4) == 0 ){
                 strcat( sqltext, "' AND (TO_NUMBER(‰È–ÚID,'999999')>=850100 AND TO_NUMBER(‰È–ÚID,'999999')<=850399) " );
@@ -1492,8 +1501,8 @@ static int checkDelAccount()
             strcat( sqltext, " WHERE “X”Ô='" );
             strcat( sqltext, h_BranchNo);
             strcat( sqltext, "' AND ");
-            strcat( sqltext, "CIFNO='");
-            strcat( sqltext, h_CIFNO);
+            strcat( sqltext, "ŒûÀ”Ô†='");
+            strcat( sqltext, h_AccntNo);
             strcat( sqltext, "' ");      
 		}
         /* ŠO‰Ý—a‹à */
@@ -1503,8 +1512,11 @@ static int checkDelAccount()
             strcat( sqltext, " WHERE “X”Ô='" );
             strcat( sqltext, h_BranchNo);
             strcat( sqltext, "' AND ");
-            strcat( sqltext, "CIFNO='");
-            strcat( sqltext, h_CIFNO);
+            strcat( sqltext, "ŒûÀ”Ô†='");
+            strcat( sqltext, h_AccntNo);
+            strcat( sqltext, "' AND ");
+            strcat( sqltext, "ŒûÀŒû”Ô†='");
+            strcat( sqltext, h_AccntSubNo);
             /* ŒÂlŒü‚¯ŠO‰Ý•’Ê—a‹à */
             if( strncmp(h_AccntType, LOADING_ACCNT_TYPE_GF, 4) == 0 ){
                 strcat( sqltext, "' AND ‰È–ÚID='275111' " );
