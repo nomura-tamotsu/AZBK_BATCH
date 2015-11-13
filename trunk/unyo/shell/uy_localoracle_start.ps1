@@ -59,14 +59,14 @@ ${LC_RETRY_WAITTIME} = 60
 # Local Env SubSetting
 #--------------------------------------------
 # 本番環境 追加インスタンス
-${LC_SVCNAME_11} = "OracleServiceBRCCAZBK"
+${LC_SVCNAME_11} = "OracleServiceBANKRAZB"
 # 本番環境 追加インスタンスリスナー
-${LC_SVCNAME_12} = "OracleOraDb11g_home1TNSListenerAZBK_LSNR"
+${LC_SVCNAME_12} = "OracleOraDb11g_home1TNSListenerBANKRAZB_LSNR"
 #--------------------------------------------
 # 研修環境 追加インスタンス
 ${LC_SVCNAME_21} = "OracleServiceBANKRTRN"
 # 研修環境 追加インスタンスリスナー
-${LC_SVCNAME_22} = "OracleOraDb11g_home1TNSListenerTRNG_LSNR"
+${LC_SVCNAME_22} = "OracleOraDb11g_home1TNSListenerBANKRTRN_LSNR"
 
 #--------------------------------------------
 # Function
