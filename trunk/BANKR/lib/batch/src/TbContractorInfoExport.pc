@@ -29,6 +29,9 @@
 /* %01 | 15/02/06 | 土居 康一郎 | 日中連絡先のホスト変数桁数修正(15→20)    */
 /* %02 | 15/02/06 | 土居 康一郎 | 限度額のフォーマットの精度を整数のみに修正*/
 /* %03 | 15/02/12 | 土居 康一郎 | ファイル書込エラー時のログ出力修正        */
+/* %04 | 15/12/08 | 村上 直人   | 契約日が休日の場合、翌営業日に補正する。  */
+/*     |          |             | サブクエリやOUTER JOINがプレコンパイラで  */
+/*     |          |             | エラーになるため、PREPAREに変更する。     */
 /*==========================================================================*/
 /*---------------------------------------------------------------------------*/
 /* Standard include specification                                            */
@@ -426,40 +429,99 @@ static int cursorOpen( char *g_szDtlMsg )
 
 
     /* カーソル定義 */
-    G_POSITION = __LINE__;
-    EXEC SQL DECLARE CUR_01 CURSOR FOR
-        SELECT
-            契約者番号
-            ,CIFNO
-            ,TB申込店
-            ,日中連絡先電話番号
-            ,申込日
-            ,契約日
-            ,契約解除日
-            ,事前振込限度額1回
-            ,事前振込限度額1日
-            ,暗証変更日
-            ,暗証番号入力回数
-            ,TO_CHAR(暗証番号誤入力日時,'YYYYMMDDHH24MISS')
-            ,暗証ロック
-            ,TO_CHAR(暗証ロック日時,'YYYYMMDDHH24MISS')
-            ,事故届
-            ,事故設定ID
-            ,TO_CHAR(事故設定日時,'YYYYMMDDHH24MISS')
-            ,TO_CHAR(事故解除日時,'YYYYMMDDHH24MISS')
-            ,事故設定者
-            ,TO_CHAR(承認日,'YYYYMMDDHH24MISS')
-            ,承認者
-            ,TO_CHAR(登録日,'YYYYMMDDHH24MISS')
-            ,登録者
-            ,TO_CHAR(最終更新日,'YYYYMMDDHH24MISS')
-            ,最終更新者
-        FROM
-            TFB_テレバン契約属性                       
-        ORDER BY
-            契約者番号;
+/* %04 Modify Start
+**    G_POSITION = __LINE__;
+**    EXEC SQL DECLARE CUR_01 CURSOR FOR
+**        SELECT
+**            契約者番号
+**            ,CIFNO
+**            ,TB申込店
+**            ,日中連絡先電話番号
+**            ,申込日
+**            ,契約日
+**            ,契約解除日
+**            ,事前振込限度額1回
+**            ,事前振込限度額1日
+**            ,暗証変更日
+**            ,暗証番号入力回数
+**            ,TO_CHAR(暗証番号誤入力日時,'YYYYMMDDHH24MISS')
+**            ,暗証ロック
+**            ,TO_CHAR(暗証ロック日時,'YYYYMMDDHH24MISS')
+**            ,事故届
+**            ,事故設定ID
+**            ,TO_CHAR(事故設定日時,'YYYYMMDDHH24MISS')
+**            ,TO_CHAR(事故解除日時,'YYYYMMDDHH24MISS')
+**            ,事故設定者
+**            ,TO_CHAR(承認日,'YYYYMMDDHH24MISS')
+**            ,承認者
+**            ,TO_CHAR(登録日,'YYYYMMDDHH24MISS')
+**            ,登録者
+**            ,TO_CHAR(最終更新日,'YYYYMMDDHH24MISS')
+**            ,最終更新者
+**        FROM
+**            TFB_テレバン契約属性                       
+**        ORDER BY
+**            契約者番号;
+*/
 
-    /* カーソル・オープン */
+    memset(sqlcmd, 0x00, sizeof(sqlcmd));
+    strcpy(sqlcmd, "SELECT ");
+    strcat(sqlcmd, "TKZ.契約者番号 ");
+    strcat(sqlcmd, ",TKZ.CIFNO ");
+    strcat(sqlcmd, ",TKZ.TB申込店 ");
+    strcat(sqlcmd, ",TKZ.日中連絡先電話番号 ");
+    strcat(sqlcmd, ",TKZ.申込日 ");
+    strcat(sqlcmd, ",CASE WHEN CLD.日付 IS NULL ");
+    strcat(sqlcmd, "THEN TKZ.契約日 ");
+    strcat(sqlcmd, "ELSE (" );
+    strcat(sqlcmd, "SELECT NVL(TO_CHAR(MIN(日付), 'YYYYMMDD'), TKZ.契約日) ");
+    strcat(sqlcmd, "FROM TMB_カレンダ ");
+    strcat(sqlcmd, "WHERE 区分 = '1' ");
+    strcat(sqlcmd, "AND 休日フラグ = '0' ");
+    strcat(sqlcmd, "AND 日付 >= TO_DATE(TKZ.契約日, 'YYYY/MM/DD') ");
+    strcat(sqlcmd, ") ");
+    strcat(sqlcmd, "END AS 契約日 ");
+    strcat(sqlcmd, ",TKZ.契約解除日 ");
+    strcat(sqlcmd, ",TKZ.事前振込限度額1回 ");
+    strcat(sqlcmd, ",TKZ.事前振込限度額1日 ");
+    strcat(sqlcmd, ",TKZ.暗証変更日 ");
+    strcat(sqlcmd, ",TKZ.暗証番号入力回数 ");
+    strcat(sqlcmd, ",TO_CHAR(TKZ.暗証番号誤入力日時,'YYYYMMDDHH24MISS') ");
+    strcat(sqlcmd, ",TKZ.暗証ロック ");
+    strcat(sqlcmd, ",TO_CHAR(TKZ.暗証ロック日時,'YYYYMMDDHH24MISS') ");
+    strcat(sqlcmd, ",TKZ.事故届 ");
+    strcat(sqlcmd, ",TKZ.事故設定ID ");
+    strcat(sqlcmd, ",TO_CHAR(TKZ.事故設定日時,'YYYYMMDDHH24MISS') ");
+    strcat(sqlcmd, ",TO_CHAR(TKZ.事故解除日時,'YYYYMMDDHH24MISS') ");
+    strcat(sqlcmd, ",TKZ.事故設定者 ");
+    strcat(sqlcmd, ",TO_CHAR(TKZ.承認日,'YYYYMMDDHH24MISS') ");
+    strcat(sqlcmd, ",TKZ.承認者 ");
+    strcat(sqlcmd, ",TO_CHAR(TKZ.登録日,'YYYYMMDDHH24MISS') ");
+    strcat(sqlcmd, ",TKZ.登録者 ");
+    strcat(sqlcmd, ",TO_CHAR(TKZ.最終更新日,'YYYYMMDDHH24MISS') ");
+    strcat(sqlcmd, ",TKZ.最終更新者 ");
+    strcat(sqlcmd, "FROM ");
+    strcat(sqlcmd, "TFB_テレバン契約属性 TKZ ");
+    strcat(sqlcmd, "LEFT OUTER JOIN TMB_カレンダ CLD ON CLD.区分 = '1' AND CLD.日付 = TO_DATE(TKZ.契約日, 'YYYY/MM/DD') ");
+    strcat(sqlcmd, "ORDER BY ");
+    strcat(sqlcmd, "TKZ.契約者番号 ");
+
+    G_POSITION = __LINE__;
+    EXEC SQL PREPARE sqlcommand FROM :sqlcmd;
+    if( sqlca.sqlcode < 0 ){
+        send_err( m$emb_error, sqlca.sqlcode, sqlcmd, NULL, NULL, G_STATION);
+        send_err( m$sql_statment, sqlca.sqlcode, "テレバン契約属性の取得(PREPARE)に失敗", NULL, NULL, G_STATION );
+        return ERROR;
+    }
+
+    G_POSITION = __LINE__;
+    EXEC SQL DECLARE CUR_01 CURSOR FOR sqlcommand;
+    if( sqlca.sqlcode < 0 ){
+        send_err( m$emb_error, sqlca.sqlcode, sqlcmd, NULL, NULL, G_STATION);
+        send_err( m$sql_statment, sqlca.sqlcode, "テレバン契約属性の取得(DECLARE)に失敗", NULL, NULL, G_STATION );
+        return ERROR;
+    }
+
     EXEC SQL OPEN CUR_01;
     if( sqlca.sqlcode != 0 ) {
         sprintf( g_szDtlMsg,
@@ -757,3 +819,4 @@ static void finalize( int rc )
 
     exit( rc );
 }
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                
