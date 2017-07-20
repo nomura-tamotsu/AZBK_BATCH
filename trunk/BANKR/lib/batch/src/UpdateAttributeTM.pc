@@ -28,6 +28,7 @@
 /* %02 | 14/05/12 | ISID        | 属性ID:0013～0016の処理を追加             */
 /* %03 | 14/05/27 | ISID        | 住所変更をeMuSC仕様にあわせる             */
 /* %04 | 15/01/30 | 土居 康一郎 | あおぞら1.0次 住所５分割対応              */
+/* %05 | 17/06/09 | K.Tamura    | 住所属性削除時のログ強化                  */
 /*==========================================================================*/
 /*--------------------------------------------------------------------------*/
 /* Standard include specification                                           */
@@ -138,6 +139,8 @@ char	*argv[];
 	char		chg_address_buff[1024];		/* %03 Add 属性変更用の住所バッファ */
 	char		address_buff    [1024];		/* %03 Add 顧客属性用の住所バッファ */
 
+    char  w_buff[4096]; /* %05 */
+    
 /*==========================================================================*/
 /*      INITIALIZATION                                                      */
 /*==========================================================================*/
@@ -694,6 +697,12 @@ char	*argv[];
 						exitcode = ERROR;
 						goto ENDPROC;
 					}
+					/* %05 ADD Start */
+					memset(w_buff,0x00,sizeof(w_buff));
+					sprintf ( w_buff ,"CIF=[%s]属性ID=[%s]住所変更前[%s]変更後[%s]", TDAC_cif_number,TDAC_attribute_id,chg_address_buff, address_buff);
+					send_err ( m$message1, 0, w_buff, NULL, NULL, G_STATION);
+
+					/* %05 ADD End */
                     continue;
                 }
 
