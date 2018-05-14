@@ -11,6 +11,7 @@
 # Mod   yy/mm/dd   Coder           Comment
 #-----+----------+---------------+-------------------------------------------
 # %00 | 14/03/11 | R.YAMANO      | First Edition
+# %01 | 17/02/01 | R.YAMANO      | 保守対応-ログメンテナンス機能改善対応
 #============================================================================
 #
 # ディレクトリ定義
@@ -108,6 +109,22 @@ ${BACKUP_AUDIT_LOG_DEF} = "${UNYO_DEF_DIR}\BACKUP_AUDIT_LOG_DEF_${HOST_TYPE}.cfg
 #${DBBKUP_DATA_FILE_DEF} = "${UNYO_DEF_DIR}\DBBKUP_DATA_FILE_DEF_${HOST_TYPE}.cfg"
 # 配信ファイルメンテナンス
 ${SENDNM_FILE_DEF}      = "${UNYO_DEF_DIR}\HULFT_SEND_FILE_DEF_${HOST_TYPE}.cfg"
+#----------------------------------------------------------------------
+# バックアップリラン用定義
+# 各種ログバックアップ処理失敗リスト定義
+${FAIL_BACKUP_OTHER_LOG_DEF} = "${UNYO_WRK_DIR}\TMP_BACKUP_OTHER_LOG_DEF_${HOST_TYPE}.cfg"
+# メンテ用各種ログバックアップ処理失敗リスト定義
+${LOGBACKUP_OTHER_RERUN_LST} = "${UNYO_WRK_DIR}\MNT_LOGBACKUP_OTHER_RERUN.lst"
+# メンテ用各種ログバックアップ処理失敗リスト定義(TMP)
+${LOGBACKUP_OTHER_RERUN_LST_TMP} = "${UNYO_WRK_DIR}\TMP_MNT_LOGBACKUP_OTHER_RERUN.lst"
+# 監査ログバックアップ処理リスト定義
+${FAIL_BACKUP_AUDIT_LOG_DEF} = "${UNYO_WRK_DIR}\TMP_BACKUP_AUDIT_LOG_DEF_${HOST_TYPE}.cfg"
+# メンテ用監査ログバックアップ処理失敗リスト定義
+${LOGBACKUP_AUDIT_RERUN_LST} = "${UNYO_WRK_DIR}\MNT_LOGBACKUP_AUDIT_RERUN.lst"
+# メンテ用監査ログバックアップ処理失敗リスト定義(TMP)
+${LOGBACKUP_AUDIT_RERUN_LST_TMP} = "${UNYO_WRK_DIR}\TMP_MNT_LOGBACKUP_AUDIT_RERUN.lst"
+# バックアップリトライ回数上限値(閾値)
+${COM_LOGBAKUP_RETRYCOUNT} = 30
 
 #----------------------------------------------------------------------
 # EVENT LOG
@@ -116,6 +133,10 @@ ${SENDNM_FILE_DEF}      = "${UNYO_DEF_DIR}\HULFT_SEND_FILE_DEF_${HOST_TYPE}.cfg"
 ${global:COM_EVNTYPE} = "Security","Application","System"
 # イベントログ出力ファイルフォーム(event_sec_運用日付.log)
 ${global:COM_EVENT_LOGFILE} = "event_sec","event_apl","event_sys"
+# 最大取得日数
+${global:COM_EVENT_LOGDAYS} = 7
+# イベントログ作成履歴ファイル
+${global:COM_EVENT_CKDATE_FILE} = "${UNYO_WRK_DIR}\CKDate_EventLog.flg"
 
 #----------------------------------------------------------------------
 # CLUSTER INFO

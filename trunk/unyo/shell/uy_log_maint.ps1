@@ -15,6 +15,7 @@
 # Mod   yy/mm/dd   Coder           Comment
 #-----+----------+---------------+-------------------------------------------
 # %00 | 14/03/14 | R.YAMANO      | First Eddition
+# %01 | 17/01/30 | R.YAMANO      | 保守対応-ログメンテナンス機能改善対応
 #============================================================================
 #--------------------------------------------
 # Get Parameter Information
@@ -126,6 +127,23 @@ if ( ${RTN_CD00} -ne ${DEF_RTNCD_NML} ) {
 } else {
     FC_LogWriter ${DEF_RTNCD_NML} "${LC_EXECUTE_MSG}処理を終了します。"
 }
+
+# %01 ADD START
+#--------------------------------------------
+# 処理4.ログバックアップメンテ処理
+#--------------------------------------------
+${LC_EXECUTE_MSG} = "ログバックアップメンテ処理"
+${LC_EXECUTE_PGM} = "uy_logbackup_maint.ps1"
+FC_LogWriter ${DEF_RTNCD_NML} "${LC_EXECUTE_MSG}処理を実施します。"
+${RTN_COMMAND00} = Start-Process powershell.exe "${UNYO_MOD_DIR}\${LC_EXECUTE_PGM} ${LCOPTION}" -PassThru -Wait -WindowStyle  Hidden
+${RTN_CD00} = ${RTN_COMMAND00}.ExitCode
+${RTN_COMMAND00}.Close()
+if ( ${RTN_CD00} -ne ${DEF_RTNCD_NML} ) {
+    LFC_AbnormalEndProcess
+} else {
+    FC_LogWriter ${DEF_RTNCD_NML} "${LC_EXECUTE_MSG}処理を終了します。"
+}
+# %01 ADD END
 
 #--------------------------------------------
 # End Main Program

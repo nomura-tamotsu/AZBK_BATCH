@@ -15,6 +15,7 @@
 # Mod   yy/mm/dd   Coder           Comment
 #-----+----------+---------------+-------------------------------------------
 # %00 | 14/03/11 | R.YAMANO      | First Edition
+# %01 | 17/01/30 | R.YAMANO      | 保守対応-ログメンテナンス機能改善対応
 #============================================================================
 #----------------------------------------------------------------------#
 # ComFunction for BANK*R CC  Ver.1.0.0                                 #
@@ -49,8 +50,17 @@ function global:FC_LogWriter
             "9" { ${LOGLEVEL} = "[WARN] :" ; break }
             default { ${LOGLEVEL} = "[DBUG] :" }
         }
+
+        # %01 ADD START
+        ${LC_MX_LOGWRITER} = New-Object System.Threading.Mutex($false, "Global\MX_LOGWRITER")
+        ${TMPMX_WAITONE00} = ${LC_MX_LOGWRITER}.WaitOne() 
+        # %01 ADD END
         "${LOGTIMES} ${HOST_NAME} ${LOGLEVEL} ${LC_LOGPRM2}" | `
         Out-File -FilePath ${ACT_FILE} -Append -Encoding default
+        # %01 ADD START
+        ${LC_MX_LOGWRITER}.ReleaseMutex()
+        ${LC_MX_LOGWRITER}.Close()
+        # %01 ADD END
     }
     return
 }
@@ -113,8 +123,18 @@ function global:outmsg
 
     ${PUT_TIME} = Get-Date -format "${COM_DATEFORM00}"
     ${LGN_TIME} = Get-Date -format "${COM_DATEFORM07}"
+
+    # %01 ADD START
+    ${LC_MX_ERRORLOG} = New-Object System.Threading.Mutex($false, "Global\MX_ERRORLOG")
+    ${TMPMX_WAITONE01} = ${LC_MX_ERRORLOG}.WaitOne() 
+    # %01 ADD END
     "${PUT_TIME} ${HOST_NAME} ${MSG_ID} ${MSG_LINE} ${MSG_TEXT} [${MOD_NAME}(${USER_NAME})] ${MSG_ERROR_CODE}" | `
     Out-File -FilePath ${UNYO_LOG_BASE_FILE} -Append -Encoding default
+    # %01 ADD START
+    ${LC_MX_ERRORLOG}.ReleaseMutex()
+    ${LC_MX_ERRORLOG}.Close()
+    # %01 ADD END
+
 #    "${PUT_TIME} ${HOST_NAME} ${MSG_ID} ${MSG_LINE} ${MSG_TEXT} [${MOD_NAME}(${USER_NAME})] ${MSG_ERROR_CODE}" | `
 #    Out-File -FilePath ${UNYO_LOG_DAYS_FILE}${LGN_TIME} -Append -Encoding default
 
@@ -200,6 +220,9 @@ function global:MakeUnyoudaysFile ( [string] ${FL_SEGDATE} = "x" )
         } else {
             outmsg 54 ${DEF_RTNCD_ERR}
             FC_LogWriter 1 "運用日付指定に誤りがあります。指定フォーマットは[YYYYMMDD]です。基本日付(前日)にて設定致します"
+            # %01 ADD START
+            ${LC_YESTERDAY_TIME} = (Get-Date).AddDays(-1) | %{ $_.ToString(${COM_DATEFORM08}) }
+            # %01 ADD END
         }
     } else {
         ${LC_YESTERDAY_TIME} = (Get-Date).AddDays(-1) | %{ $_.ToString(${COM_DATEFORM08}) }

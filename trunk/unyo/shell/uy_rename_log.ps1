@@ -17,6 +17,7 @@
 # %00 | 07/01/19 | R.YAMANO      | First  Eddition
 # %01 | 07/07/01 | R.YAMANO      | Second Eddition
 # %02 | 15/01/27 | R.YAMANO      | 対象ファイル キー置換処理追加
+# %03 | 17/01/30 | R.YAMANO      | 保守対応-ログメンテナンス機能改善対応
 #============================================================================
 #--------------------------------------------
 # Get Parameter Information
@@ -51,6 +52,12 @@ ${PRG_EXIT_CODE}    = 0
 ${LOG_FLAG}         = 1
 ${ACT_TIME}         = Get-Date -format "${COM_DATEFORM03}"
 ${ACT_FILE}         = "${UNYO_LOG_ACTOUTDIR}/${MOD_NAME}.log.${ACT_TIME}"
+# %03 ADD START
+# リトライ処理制御用変数
+${LC_RETRY_COUNT} = 5
+${LC_RETRY_WAIT}  = 10
+# %03 ADD END
+
 
 #--------------------------------------------
 # Function
@@ -214,13 +221,29 @@ foreach ( ${LC_LINE01} in Get-Content ${RENAME_FILE_DEF} | Select-String -NotMat
                                     if ( ${RN_COMPAR_CODE} -eq 0 ) {
                                         # 差がない為、リネーム処理は成功しています。
                                         FC_LogWriter ${DEF_RTNCD_NML} "[${RENAME_FILEDIFI_S}]ファイルのクリア処理(Step.2:クリア処理)を実施します。"
-                                        ${RTN_CLR_TEMP} = Clear-Content -Path ${RENAME_FILEDIFI_S}
-                                        ${RTN_CLR_CODE} = $?
+                                        # %03 UPDATE START
+                                        # ${RTN_CLR_TEMP} = Clear-Content -Path ${RENAME_FILEDIFI_S}
+                                        # ${RTN_CLR_CODE} = $?
+                                        for ( ${i} = 1 ; ${i} -le ${LC_RETRY_COUNT} ; ${i}++ ) {
+                                            ${RTN_CLR_TEMP} = Clear-Content -Path ${RENAME_FILEDIFI_S}
+                                            ${RTN_CLR_CODE} = $?
+                                            if ( !${RTN_CLR_CODE} ) {
+                                                Start-Sleep -s ${LC_RETRY_WAIT}
+                                                FC_LogWriter ${DEF_RTNCD_NML} "[${RENAME_FILEDIFI_S}]ファイルのクリア処理をリトライします。"
+                                            } else {
+                                                break
+                                            }
+                                        }
+                                        # %03 UPDATE END
                                         if ( !${RTN_CLR_CODE} ) {
-                                            ${PRG_EXIT_CODE} = ${DEF_RTNCD_ERR}
-                                            outmsg 6001 ${PRG_EXIT_CODE} ${RENAME_FILEDIFI_S}
-                                            FC_LogWriter ${PRG_EXIT_CODE} "[${RENAME_FILEDIFI_S}]ファイルのクリア処理(Step.2:クリア処理)にてエラーが発生しました。"
-                                            EndProcess
+                                            # %03 UPDATE START
+                                            # ${PRG_EXIT_CODE} = ${DEF_RTNCD_ERR}
+                                            # outmsg 6001 ${PRG_EXIT_CODE} ${RENAME_FILEDIFI_S}
+                                            # FC_LogWriter ${PRG_EXIT_CODE} "[${RENAME_FILEDIFI_S}]ファイルのクリア処理(Step.2:クリア処理)にてエラーが発生しました。"
+                                            # EndProcess
+                                            outmsg 6002 ${DEF_RTNCD_NML} ${RENAME_FILEDIFI_S}
+                                            FC_LogWriter ${DEF_RTNCD_NML} "[${RENAME_FILEDIFI_S}]ファイルのクリア処理(Step.2:クリア処理)にてエラーが発生しました。"
+                                            # %03 UPDATE END
                                         }
                                     } else {
                                         FC_LogWriter ${DEF_RTNCD_NML} "[${RENAME_FILEDIFI_S}]ファイルのクリア処理(Step.1:コンペア処理)にて差分があった為、クリア処理をスキップします。"
@@ -238,18 +261,37 @@ foreach ( ${LC_LINE01} in Get-Content ${RENAME_FILE_DEF} | Select-String -NotMat
                                     continue
                                 }
 
-                                ${RTN_CLR_TEMP} = Clear-Content -Path ${RENAME_FILEDIFI_S}
-                                ${RTN_CLR_CODE} = $?
+                                # %03 UPDATE START
+                                # ${RTN_CLR_TEMP} = Clear-Content -Path ${RENAME_FILEDIFI_S}
+                                # ${RTN_CLR_CODE} = $?
+                                for ( ${i} = 1 ; ${i} -le ${LC_RETRY_COUNT} ; ${i}++ ) {
+                                    ${RTN_CLR_TEMP} = Clear-Content -Path ${RENAME_FILEDIFI_S}
+                                    ${RTN_CLR_CODE} = $?
+                                    if ( !${RTN_CLR_CODE} ) {
+                                        Start-Sleep -s ${LC_RETRY_WAIT}
+                                        FC_LogWriter ${DEF_RTNCD_NML} "[${RENAME_FILEDIFI_S}]ファイルのクリア処理をリトライします。"
+                                    } else {
+                                        break
+                                    }
+                                }
+                                # %03 UPDATE END
                                 if ( !${RTN_CLR_CODE} ) {
-                                    ${PRG_EXIT_CODE} = ${DEF_RTNCD_ERR}
-                                    outmsg 6001 ${PRG_EXIT_CODE} ${RENAME_FILEDIFI_S}
-                                    FC_LogWriter ${PRG_EXIT_CODE} "[${RENAME_FILEDIFI_S}]ファイルの強制クリア処理にてエラーが発生しました。"
-                                    EndProcess
+                                    # %03 UPDATE START
+                                    # ${PRG_EXIT_CODE} = ${DEF_RTNCD_ERR}
+                                    # outmsg 6001 ${PRG_EXIT_CODE} ${RENAME_FILEDIFI_S}
+                                    # FC_LogWriter ${PRG_EXIT_CODE} "[${RENAME_FILEDIFI_S}]ファイルの強制クリア処理にてエラーが発生しました。"
+                                    # EndProcess
+                                    outmsg 6002 ${DEF_RTNCD_NML} ${RENAME_FILEDIFI_S}
+                                    FC_LogWriter ${DEF_RTNCD_NML} "[${RENAME_FILEDIFI_S}]ファイルの強制クリア処理にてエラーが発生しました。"
+                                    # %03 UPDATE END
                                 }
                                 break
                             }
                 default     {
-                                FC_LogWriter ${DEF_RTNCD_NML} "[${CLNAME_FILENAME_SOURCE}]ファイルのクリア区分指定に誤りがります処理をスキップします。"
+                                # %03 UPDATE START
+                                # FC_LogWriter ${DEF_RTNCD_NML} "[${CLNAME_FILENAME_SOURCE}]ファイルのクリア区分指定に誤りがります処理をスキップします。"
+                                FC_LogWriter ${DEF_RTNCD_NML} "[${RENAME_FILEDIFI_S}]ファイルのクリア区分指定に誤りがあります。処理をスキップします。"
+                                # %03 UPDATE END
                                 continue
                             }
             }

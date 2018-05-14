@@ -15,6 +15,7 @@
 # Mod   yy/mm/dd   Coder           Comment
 #-----+----------+---------------+-------------------------------------------
 # %00 | 14/03/11 | R.YAMANO      | First Eddition
+# %01 | 17/01/30 | R.YAMANO      | 保守対応-ログメンテナンス機能改善対応
 #============================================================================
 #----------------------------------------------------------------------#
 # ComLogBackup for BANK*R CC  Ver.1.0.0                                #
@@ -57,7 +58,25 @@ function global:FC_BACKUP_COPY ( [string] ${LC_TGFILE},[string] ${LC_TGTYPE},[st
         }
     }
 
-    foreach ( ${LC_LINE01} in Get-Content ${LC_TGFILE} | Select-String -NotMatch "^#" | Select-String -NotMatch "^$" | Select-String -Pattern "^${BKUP_FLG}" ) {
+    # %01 ADD START
+    # バックアップ処理失敗リストファイル名の設定
+    ${BACKUP_TMP_FAILLIST_FNAME} = "TMP_" + $(Get-ChildItem "${LC_TGFILE}").Name
+    # バックアップ処理失敗リストファイル名(FULL-Path)
+    ${BACKUP_TMP_FAILLIST_FPATH} = ${UNYO_WRK_DIR} + "\" + ${BACKUP_TMP_FAILLIST_FNAME}
+    # バックアップ処理失敗リストファイルの初期化(処理区分COPYの場合のみ)
+    if ( ${BKUP_FLG} -eq "C" ) {
+        if ( (Test-Path ${BACKUP_TMP_FAILLIST_FPATH}) ) {
+            Clear-Content -Path ${BACKUP_TMP_FAILLIST_FPATH} 2>&1 > $null
+        } else {
+            New-Item -ItemType file ${BACKUP_TMP_FAILLIST_FPATH} 2>&1 > $null
+        }
+    }
+    # %01 ADD END
+
+    # %01 UPDATE START
+#    foreach ( ${LC_LINE01} in Get-Content ${LC_TGFILE} | Select-String -NotMatch "^#" | Select-String -NotMatch "^$" | Select-String -Pattern "^${BKUP_FLG}" ) {
+    :LPLABEL_BKFILELIST foreach ( ${LC_LINE01} in Get-Content ${LC_TGFILE} | Select-String -NotMatch "^#" | Select-String -NotMatch "^$" | Select-String -Pattern "^${BKUP_FLG}" ) {
+    # %01 UPDATE END
 
         # 処理件数確認用
         ${LC_ACT_COUNT} = 0
@@ -124,8 +143,11 @@ function global:FC_BACKUP_COPY ( [string] ${LC_TGFILE},[string] ${LC_TGTYPE},[st
         switch("${TG_BACKUPTYPE}") {
             "F"     { ${BKUP_CHKFLG} = ${False} ; ${BKUP_CHKMSG} = "ファイル"     ; break }
             "D"     { ${BKUP_CHKFLG} = ${True}  ; ${BKUP_CHKMSG} = "ディレクトリ" ; break }
-            default { FC_LogWriter ${DEF_RTNCD_NML} "[${TG_SORCE_DIFI}]ファイルまたはディレクトリの対象区分指定に誤りがります処理をスキップします。" 
-                      continue
+            # %01 UPDATE START
+            # default { FC_LogWriter ${DEF_RTNCD_NML} "[${TG_SORCE_DIFI}]ファイルまたはディレクトリの対象区分指定に誤りがります処理をスキップします。" 
+            default { FC_LogWriter ${DEF_RTNCD_NML} "[${TG_SORCE_DIFI}]ファイルまたはディレクトリの対象区分指定に誤りがあります。処理をスキップします。" 
+                      continue LPLABEL_BKFILELIST
+            # %01 UPDATE END
                     }
         }
 
@@ -154,21 +176,54 @@ function global:FC_BACKUP_COPY ( [string] ${LC_TGFILE},[string] ${LC_TGTYPE},[st
 
                 # COPY or MOVE
                 if ( "${BKUP_FLG}" -eq "C" ) {
-                    ${RTN_CPY_TEMP} = Copy-Item ${BACKUP_FILEDIFI_S} ${BACKUP_FILEDIFI_D} -Recurse
-                    ${RTN_CPY_CODE} = $?
+                    # %01 UPDATE START
+                    # ${RTN_CPY_TEMP} = Copy-Item ${BACKUP_FILEDIFI_S} ${BACKUP_FILEDIFI_D} -Recurse
+                    # ${RTN_CPY_CODE} = $?
+                    try { 
+                        ${RTN_CPY_TEMP} = Copy-Item ${BACKUP_FILEDIFI_S} ${BACKUP_FILEDIFI_D} -Recurse
+                        ${RTN_CPY_CODE} = $?
+                    } catch [Exception] {
+                        ${RTN_CPY_CODE} = ${False}
+                    }
+                    # %01 UPDATE END
                 } else {
-                    ${RTN_CPY_TEMP} = Move-Item ${BACKUP_FILEDIFI_S} ${BACKUP_FILEDIFI_D} -Force
-                    ${RTN_CPY_CODE} = $?
+                    # %01 UPDATE START
+                    # ${RTN_CPY_TEMP} = Move-Item ${BACKUP_FILEDIFI_S} ${BACKUP_FILEDIFI_D} -Force
+                    # ${RTN_CPY_CODE} = $?
+
+                    # 対象ファイル依存関係チェック処理
+                    if ( (Get-Content ${BACKUP_TMP_FAILLIST_FPATH} | Select-String -SimpleMatch ",${BACKUP_FILEDIFI_S}," -Quiet ) ) {
+                        # バックアップ処理失敗リストファイルへの追加
+                        # 処理区分${BKUP_FLG},対象区分${TG_BACKUPTYPE},${BACKUP_FILEDIFI_S},${BACKUP_FILEDIFI_D},0
+                        "${BKUP_FLG},${TG_BACKUPTYPE},${BACKUP_FILEDIFI_S},${BACKUP_FILEDIFI_D},0" | `
+                        Out-File -FilePath ${BACKUP_TMP_FAILLIST_FPATH} -Append -Encoding default
+                        FC_LogWriter ${DEF_RTNCD_NML} "[${BACKUP_FILEDIFI_S}]${BKUP_CHKMSG}のバックアップ処理(${BKUP_MODE})の事前確認にてスキップ対象となりました。バックアップ処理(${BKUP_MODE})をスキップします。"
+                        continue
+                    }
+                    try {
+                        ${RTN_CPY_TEMP} = Move-Item ${BACKUP_FILEDIFI_S} ${BACKUP_FILEDIFI_D} -Force -ErrorAction Stop
+                        ${RTN_CPY_CODE} = $?
+                    } catch [Exception] {
+                        ${RTN_CPY_CODE} = ${False}
+                    }
+                    # %01 UPDATE END
                 }
 
                 if ( ${RTN_CPY_CODE} ) {
                     FC_LogWriter ${DEF_RTNCD_NML} "[${BACKUP_FILEDIFI_S}]${BKUP_CHKMSG}のバックアップ処理(${BKUP_MODE})が正常終了しました。"
                 } else {
-                    ${PRG_EXIT_CODE} = ${DEF_RTNCD_ERR}
-                    outmsg 1 ${PRG_EXIT_CODE} "[${BACKUP_FILEDIFI_S}]${BKUP_CHKMSG}のバックアップ処理(${BKUP_MODE})にてエラーが発生しました。"
-                    FC_LogWriter ${PRG_EXIT_CODE} "[${BACKUP_FILEDIFI_S}]${BKUP_CHKMSG}のバックアップ処理(${BKUP_MODE})にてエラーが発生しました。"
-                    #EndProcess
-                    return ${False}
+                    # %01 UPDATE START
+                    # ${PRG_EXIT_CODE} = ${DEF_RTNCD_ERR}
+                    # outmsg 1 ${PRG_EXIT_CODE} "[${BACKUP_FILEDIFI_S}]${BKUP_CHKMSG}のバックアップ処理(${BKUP_MODE})にてエラーが発生しました。"
+                    # FC_LogWriter ${PRG_EXIT_CODE} "[${BACKUP_FILEDIFI_S}]${BKUP_CHKMSG}のバックアップ処理(${BKUP_MODE})にてエラーが発生しました。"
+                    # EndProcess
+                    # return ${False}
+                    # バックアップ処理失敗リストファイルへの追加
+                    "${BKUP_FLG},${TG_BACKUPTYPE},${BACKUP_FILEDIFI_S},${BACKUP_FILEDIFI_D},0" | `
+                    Out-File -FilePath ${BACKUP_TMP_FAILLIST_FPATH} -Append -Encoding default
+                    outmsg 1 ${DEF_RTNCD_NML} "[${BACKUP_FILEDIFI_S}]${BKUP_CHKMSG}のバックアップ処理(${BKUP_MODE})にてエラーが発生しました、バックアップ処理をスキップします"
+                    FC_LogWriter ${DEF_RTNCD_NML} "[${BACKUP_FILEDIFI_S}]${BKUP_CHKMSG}のバックアップ処理(${BKUP_MODE})にてエラーが発生しました、バックアップ処理をスキップします。"
+                    # %01 UPDATE END
                 }
             }
         }
@@ -179,5 +234,4 @@ function global:FC_BACKUP_COPY ( [string] ${LC_TGFILE},[string] ${LC_TGTYPE},[st
     }
     return ${True}
 }
-
 

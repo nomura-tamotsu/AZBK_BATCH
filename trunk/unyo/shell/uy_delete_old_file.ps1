@@ -16,6 +16,7 @@
 #-----+----------+---------------+-------------------------------------------
 # %00 | 14/03/14 | R.YAMANO      | First Eddition
 # %01 | 15/01/27 | R.YAMANO      | 対象ファイル キー置換処理追加
+# %02 | 17/01/30 | R.YAMANO      | 保守対応-ログメンテナンス機能改善対応
 #============================================================================
 #--------------------------------------------
 # Get Parameter Information
@@ -192,10 +193,14 @@ foreach ( ${LC_LINE01} in Get-Content ${DELETE_FILE_DEF} | Select-String -NotMat
                 if ( ${RTN_DEL_CODE} ) {
                     FC_LogWriter ${DEF_RTNCD_NML} "[${DELETE_FILEDIFI_S}]${DEL_CHKMSG}の削除処理が正常終了しました。"
                 } else {
-                    ${PRG_EXIT_CODE} = ${DEF_RTNCD_ERR}
-                    outmsg 1 ${PRG_EXIT_CODE} "[${DELETE_FILEDIFI_S}]${DEL_CHKMSG}の削除処理にてエラーが発生しました。"
-                    FC_LogWriter ${PRG_EXIT_CODE} "[${DELETE_FILEDIFI_S}]${DEL_CHKMSG}の削除処理にてエラーが発生しました。"
-                    EndProcess
+                    # %02 ADD START
+                    # ${PRG_EXIT_CODE} = ${DEF_RTNCD_ERR}
+                    # outmsg 1 ${PRG_EXIT_CODE} "[${DELETE_FILEDIFI_S}]${DEL_CHKMSG}の削除処理にてエラーが発生しました。"
+                    # FC_LogWriter ${PRG_EXIT_CODE} "[${DELETE_FILEDIFI_S}]${DEL_CHKMSG}の削除処理にてエラーが発生しました。"
+                    # EndProcess
+                    outmsg 1 ${DEF_RTNCD_NML} "[${DELETE_FILEDIFI_S}]${DEL_CHKMSG}の削除処理に失敗しましたが、削除処理を続行します。"
+                    FC_LogWriter ${DEF_RTNCD_NML} "[${DELETE_FILEDIFI_S}]${DEL_CHKMSG}の削除処理に失敗しましたが、削除処理を続行します。"
+                    # %02 ADD END
                 }
 
             }
