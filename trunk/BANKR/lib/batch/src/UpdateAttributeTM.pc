@@ -29,6 +29,9 @@
 /* %03 | 14/05/27 | ISID        | 住所変更をeMuSC仕様にあわせる             */
 /* %04 | 15/01/30 | 土居 康一郎 | あおぞら1.0次 住所５分割対応              */
 /* %05 | 17/06/09 | K.Tamura    | 住所属性削除時のログ強化                  */
+/* %06 | 18/10/16 | K.Takeichi  | 住所カナ・連絡先住所カナの反映処理の場合、*/
+/*        |                |                 | (連絡先)郵便番号の更新を行わないように対応*/
+/*        |                |                 |（2018年11月保守リリース）                 */
 /*==========================================================================*/
 /*--------------------------------------------------------------------------*/
 /* Standard include specification                                           */
@@ -720,25 +723,41 @@ char	*argv[];
                         memset( sqlcmd, 0x00, sizeof(sqlcmd) );
 						strcpy( sqlcmd, "UPDATE TF_顧客属性 zok1 SET " );
 
+                        /* %06 DELETE Start */
 						/* %02 Change Start？ かなの場合郵便番号は？*/
-						if( !strcmp( TDAC_attribute_id, ZK_ADDRESS )      ||
+						/* if( !strcmp( TDAC_attribute_id, ZK_ADDRESS )      ||
 							!strcmp( TDAC_attribute_id, ZK_ADDRESS_KANA ) ) {
 							strcat( sqlcmd,     "zok1.郵便番号" );
 						}
 						else if( !strcmp( TDAC_attribute_id, ZK_CONTACT_ADDRESS ) ||
 							     !strcmp( TDAC_attribute_id, ZK_CONTACT_ADDRESS_KANA ) ) {
 							strcat( sqlcmd,     "zok1.連絡先郵便番号" );
-						}
+						} */
 						/* %02 Change End */
+                        /* %06 DELETE End */
+                        
+                        /* %06 Add Start */
+                        if( !strcmp( TDAC_attribute_id, ZK_ADDRESS ) ) {
+                            strcat( sqlcmd,     "zok1.郵便番号" );
+                        }
+                        else if( !strcmp( TDAC_attribute_id, ZK_CONTACT_ADDRESS ) ) {
+                            strcat( sqlcmd,     "zok1.連絡先郵便番号" );
+                        }
+                        /* %06 Add End */
 
-                        if( TDAC_change_after1.arr[0] != '\0' ){
-                            strcat( sqlcmd,         " = '" );
-                            strcat( sqlcmd, TDAC_change_after1.arr );
-                            strcat( sqlcmd,         "', " );
+                        /* %06 Change Start */
+                        if( !strcmp( TDAC_attribute_id, ZK_ADDRESS )  ||
+                            !strcmp( TDAC_attribute_id, ZK_CONTACT_ADDRESS )) {
+                                if( TDAC_change_after1.arr[0] != '\0' ){
+                                    strcat( sqlcmd,         " = '" );
+                                    strcat( sqlcmd, TDAC_change_after1.arr );
+                                    strcat( sqlcmd,         "', " );
+                                }
+                                else{
+                                    strcat( sqlcmd, " = NULL, " );
+                                }
                         }
-                        else{
-                            strcat( sqlcmd, " = NULL, " );
-                        }
+                        /* %06 Change End */
 
 						/* %02 Change Start */
 						if( !strcmp( TDAC_attribute_id, ZK_ADDRESS )) {
