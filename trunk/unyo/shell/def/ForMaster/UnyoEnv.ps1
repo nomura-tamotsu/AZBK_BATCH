@@ -12,6 +12,7 @@
 #-----+----------+---------------+-------------------------------------------
 # %00 | 14/03/11 | R.YAMANO      | First Edition
 # %01 | 17/02/01 | R.YAMANO      | 保守対応-ログメンテナンス機能改善対応
+# %02 | 18/12/05 | K.TAKEICHI    | NASストレージ更改対応
 #============================================================================
 #
 # ディレクトリ定義
@@ -155,7 +156,8 @@ ${global:COM_CLRP_CNTS}   = 18
 # NAS Strage INFO
 #----------------------------------------------------------------------
 # NAS 本番
-${global:COM_NAS_HOST_NAME}  = "fccnasdds01-wx"
+#${global:COM_NAS_HOST_NAME}  = "fccnasdds01-wx"
+${global:COM_NAS_HOST_NAME}  = "fccnasdds11-bw"
 ${global:COM_NAS_BASE_DIRS}  = "\\${COM_NAS_HOST_NAME}\dd_tbs_pw"
 # NAS 開発
 #${global:COM_NAS_HOST_NAME}  = "fccnasdds01-wx"

@@ -11,6 +11,7 @@
 # Mod   yy/mm/dd   Coder           Comment
 #-----+----------+---------------+-------------------------------------------
 # %00 | 14/03/11 | R.YAMANO      | First Edition
+# %01 | 18/12/05 | K.TAKEICHI    | NASストレージ更改対応
 #============================================================================
 #
 # ディレクトリ定義
@@ -137,7 +138,8 @@ ${global:COM_CLRP_CNTS}   = 18
 #${global:COM_NAS_HOST_NAME}  = "fccnasdds01-wx"
 #${global:COM_NAS_BASE_DIRS}  = "\\${COM_NAS_HOST_NAME}\dd_tbs_pw"
 # NAS 開発
-${global:COM_NAS_HOST_NAME}  = "fccnasdds01-wx"
+#${global:COM_NAS_HOST_NAME}  = "fccnasdds01-wx"
+${global:COM_NAS_HOST_NAME}  = "fccnasdds11-bw"
 ${global:COM_NAS_BASE_DIRS}  = "\\${COM_NAS_HOST_NAME}\dd_tbs_dw"
 # NAS 転送
 # 処理待機時間(秒)
