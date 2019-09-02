@@ -1,0 +1,1136 @@
+/*==========================================================================*/
+/* Copyright　Information Services International-Dentsu, Ltd.   　          */
+/*==========================================================================*/
+/*                                                                          */
+/* SYSTEM           : BANK・R－CC                                           */
+/*                                                                          */
+/* PROGRAM NAME     : 日次休眠預金口座反映処理                              */
+/*                                                                          */
+/* MODULE NAME      : DailyDormantAccount                                   */
+/*                                                                          */
+/* FUNCTION         : 日次休眠預金口座反映処理を行う                        */
+/*                                                                          */
+/*                                                                          */
+/* CALLING MODULE   : Main Module.                                          */
+/*                                                                          */
+/* CALLED MODULE    : send_err, errhandler, db_connect                      */
+/*                                                                          */
+/* ENTRY POint      : Main Module.                                          */
+/*                                                                          */
+/* INPUT            : argv[1]・・休眠預金口座ファイル(ﾌﾙﾊﾟｽ)                */
+/*                  : argv[2]・・処理結果ファイル名(ﾌﾙﾊﾟｽ)                  */
+/*                                                                          */
+/* EXIT             : 正常終了       ・・・NORMAL(0)                        */
+/*                    異常終了       ・・・ERROR (9)                        */
+/*                                                                          */
+/* Mod   yy/mm/dd   Coder           Comment                                 */
+/*-----+----------+-------------+-------------------------------------------*/
+/* %00 | 19/07/29 | ISID        | First Edition.                            */
+/*==========================================================================*/
+/*---------------------------------------------------------------------------*/
+/* Standard include specification                                            */
+/*---------------------------------------------------------------------------*/
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <ctype.h>
+#include <errno.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <time.h>
+
+/*---------------------------------------------------------------------------*/
+/* User defined include specification                                        */
+/*---------------------------------------------------------------------------*/
+#include "msg.h"
+#include "common.h"
+#include "batchcommon.h"
+#include "apl_common.h"
+
+EXEC SQL INCLUDE mbproc.h;
+
+/*---------------------------------------------------------------------------*/
+/* Internal macro definition                                                 */
+/*---------------------------------------------------------------------------*/
+
+typedef struct _RECV_FILE_DATA {
+    char    contractor_id           [ 10];      /* 契約者番号 */
+    char    cif_no                  [ 10];      /* CIFNO */
+    char    lf                      [  1];      /* 改行コード */
+} RECV_FILE_DATA;
+
+typedef struct _COUNT {
+    int  iRecNum;                              /* 処理レコード件数           */
+    int  iOkNum ;                              /* 正常終了レコード件数       */
+    int  iNgNum ;                              /* 異常終了レコード件数       */
+} COUNT;
+
+/*---------------------------------------------------------------------------*/
+/* User Local defined  specification                                         */
+/*---------------------------------------------------------------------------*/
+#define L_WRITE_END                     1
+#define L_WRITE_LOG                     0
+#define TB_KAIYAKU_FLAG                 9
+#define UPDATE_FLAG                     1
+
+/*---------------------------------------------------------------------------*/
+/* Global variable specification                                             */
+/*---------------------------------------------------------------------------*/
+/* 設定ファイル項目（ホスト変数以外）*/
+char g_szRecvFile       [AP_CONFIG_LINE];            /* 差分更新ファイル     */
+char g_szLogFile        [AP_CONFIG_LINE];            /* 処理結果ファイル     */
+
+FILE *g_pfRecvFile;
+FILE *g_pfLogFile;
+
+char g_szDtlMsg           [AP_C_NOTE_LEN_H];         /* 事象詳細文字列       */
+
+char    process_name[43];
+char    g_work[1024];
+
+int file_open_flag1  = 0;       /* ファイルオープンフラグ(データファイル用)    */
+int file_open_flag2  = 0;       /* ファイルオープンフラグ(処理結果ファイル用)  */
+
+/*---------------------------------------------------------------------------*/
+/* Host Variable                                                             */
+/*---------------------------------------------------------------------------*/
+EXEC SQL INCLUDE SQLCA;
+EXEC SQL BEGIN DECLARE SECTION;
+    /* ＤＢ接続情報 */
+    char sqlcmd[2048];
+
+    char  h_ContractorID[11];                         /*  契約者番号            */
+    char  h_CIFNO[11];                                /*   CIFNO                */
+    int  h_CancellFlg;                                /* 解約フラグ             */
+    char  h_ChangeName[9];                            /* 承認者・登録者・更新者 */
+    int  h_UpdateFlg;                                 /* UPDATEフラグ           */
+    
+    /* TF_顧客属性テーブル */
+    int  h_TBContract;                                /* テレバン契約           */
+    
+    /* TFB_テレバン契約属性テーブル */
+    int  h_SyoriType;                                 /* 処理区分               */
+    
+    long h_TB_COUNT;                                  /* 受付カウント           */
+    
+    
+
+EXEC SQL END DECLARE SECTION;
+
+/*---------------------------------------------------------------------------*/
+/* Internal function prototype                                               */
+/*---------------------------------------------------------------------------*/
+extern int send_err();
+extern void errhandler();
+extern int db_connect();
+void rtrim();
+
+static void initialize( int ac, char *av[] );
+static int  checkFilles( RECV_FILE_DATA *pData, char *g_szDtlMsg );
+static int  checkData( char *pcheck_data, int data_size, char *pmsg,
+                       char *pchange_data, char *g_szDtlMsg );
+static int statusCheck( char *g_szDtlMsg );
+static int confirmCheck( char *g_szDtlMsg );
+static int updateContractor( char *g_szDtlMsg );
+
+static int  putAcctLogFile(int tp,RECV_FILE_DATA *pData,COUNT *dCount,int rc, char *g_szDtlMsg );
+static int  commit( void );
+static int  rollback( void );
+static void finalize( int rc, int iRecNum, int iOkNum );
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   int main( int argc, char *argv[] )                                      */
+/*                                                                           */
+/* Made by:                                                                  */
+/* Description:                                                              */
+/*      メイン処理                                                           */
+/*                                                                           */
+/* Arguments:                                                                */
+/* Type     Name              I/O    Content                                 */
+/* -------- ----------------- --- ------------------------------------------ */
+/*    int    argc              I  引数の数                                   */
+/*    char  *argv[]                                                          */
+/*                    argv[1]  I  休眠預金口座ファイル（フルパス）           */
+/*                    argv[2]  I  処理結果ファイル名(ﾌﾙﾊﾟｽ)                  */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+int main( int argc, char *argv[] )
+{
+    int     exit_code = NORMAL;
+    int     rc = NORMAL;
+    unsigned int RecvSt;
+
+
+    RECV_FILE_DATA    dData;                         /* データ・レコード     */
+    COUNT             dCount; 
+    long              iCommitCnt;                  /* 分割コミット用カウンタ */
+    
+    int               rc_fin;
+
+
+    /*-----------------------------*/
+    /* Print process start message */
+    /*-----------------------------*/
+
+    strcpy( G_STATION, "DailyDormantAccount" );
+    
+    memset(process_name,0x00,sizeof(process_name));
+    strcpy(process_name,"日次休眠預金口座反映処理");
+
+    send_err( m$start_process, NORMAL, process_name, "", "", G_STATION );
+
+    memset( &dCount, 0x00, sizeof( dCount ) );
+    iCommitCnt = 0;
+
+    /*-------------------------------------------------------*/
+    /* Setup error handler routine                           */
+    /*-------------------------------------------------------*/
+    EXEC SQL WHENEVER SQLERROR DO errhandler();
+
+    G_POSITION = __LINE__;
+    rc = db_connect() ;
+    if ( rc != NORMAL ) {
+        send_err( m$db_connect, rc, "", "", "", G_STATION );
+        rc = ERROR ;
+        goto ENDPROC ;
+    }
+
+    /* ---------- */
+    /* 初期化処理 */
+    /* ---------- */
+    initialize( argc, argv );
+
+
+    while( 1 ) {
+        memset( g_szDtlMsg, 0x00, sizeof( g_szDtlMsg ) );
+
+        /* -------------------------------------- */
+        /* 休眠預金口座ファイルからの読込         */
+        /* -------------------------------------- */
+        RecvSt = (unsigned int)fread( (char *) &dData, sizeof( RECV_FILE_DATA ), 1, g_pfRecvFile );
+
+        if (RecvSt != 1) {
+            if (feof( g_pfRecvFile ) != 0) {
+                rc = NORMAL;
+                break;
+            }
+            else{
+                sprintf(g_szDtlMsg,"休眠預金口座ファイル(%s)の読込に失敗しました。",g_szRecvFile);
+                send_err ( m$file_read, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+
+                rc = ERROR;
+                break;
+            }
+        }
+        else{
+            rc = NORMAL;
+        }
+
+        dCount.iRecNum++;
+
+
+        /* ------------------------------------------ */
+        /* 休眠預金口座ファイルからのチェック         */
+        /* ------------------------------------------ */
+        if ( (rc = checkFilles( &dData, g_szDtlMsg )) != NORMAL ){
+            goto WriteFile;
+        }
+
+        /* ------------------------------------------ */
+        /* 契約者のステータスを確認                   */
+        /* ------------------------------------------ */
+        if ( (rc = statusCheck( g_szDtlMsg )) != NORMAL ){
+            goto WriteFile;
+        }
+        
+        /* ------------------------------------------ */
+        /* 契約者の編集中（承認待ち）のチェック       */
+        /* ------------------------------------------ */
+        if ( (rc = confirmCheck( g_szDtlMsg )) != NORMAL ){
+            goto WriteFile;
+        }
+        
+        /* ------------------------------------------ */
+        /* テレバン契約者を解約する                   */
+        /* ------------------------------------------ */        
+        if ( (rc = updateContractor( g_szDtlMsg )) != NORMAL ){
+            goto WriteFile;
+        }
+        
+        /* -------------------------------------------*/
+        /* コミット                                   */
+        /* -------------------------------------------*/
+        if ((rc = commit()) != NORMAL ){
+            h_UpdateFlg = 1;
+            goto WriteFile;
+        }
+
+        iCommitCnt++;                      /* 差分ファイルの処理件数 */
+
+
+WriteFile:
+        if ( rc == ERROR ) {
+            if ( h_UpdateFlg == UPDATE_FLAG){
+               rollback();
+             }
+            dCount.iNgNum++;
+        }
+
+        /* ログ出力 */
+        putAcctLogFile(L_WRITE_LOG, &dData, &dCount, rc, g_szDtlMsg );
+    } /* while loop end */
+
+
+    if( rc == NORMAL && dCount.iRecNum == 0 ){
+        sprintf ( g_szDtlMsg, "休眠預金口座ファイル(%s)は０件ファイルです。", g_szRecvFile );
+        send_err (m$message1, NORMAL, g_szDtlMsg, NULL, NULL, G_STATION);
+    }
+
+
+    if ( rc != NORMAL ) {
+        rollback();
+    }
+    else{
+        /* ＤＢのコミット */
+        if( iCommitCnt > 0 ){
+            dCount.iOkNum  = dCount.iOkNum  + iCommitCnt;
+            rc = commit();
+        }
+    }
+
+    rc_fin = putAcctLogFile(L_WRITE_END, &dData, &dCount, rc, g_szDtlMsg );
+    if (rc == NORMAL){
+        rc = rc_fin;
+    }
+
+
+ENDPROC:
+
+    if ( rc == NORMAL ) {
+        send_err( m$stop_process, NORMAL, process_name, "", "", G_STATION );
+    } else {
+        send_err( m$abend_process, ERROR, process_name, "", "", G_STATION );
+    }
+
+     finalize( rc, dCount.iRecNum, dCount.iOkNum );
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   void initialize( int ac, char *av[] )                                   */
+/*                                                                           */
+/* Made by:                                                                  */
+/* Description:                                                              */
+/*      初期化処理                                                           */
+/*                                                                           */
+/* Arguments:                                                                */
+/* Type     Name              I/O    Content                                 */
+/* -------- ----------------- --- ------------------------------------------ */
+/*    int    ac                I  引数の数                                   */
+/*    char  *av[]     argv[1]  I  休眠預金口座ファイル（フルパス）           */
+/*                    argv[2]  I  処理結果ファイル名(ﾌﾙﾊﾟｽ)                  */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*                                                                           */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static void initialize( int ac, char *av[] )
+{   
+    int exit_code=NORMAL;
+
+    /* 起動パラメータを使用する */
+    if ( ac == 3 ) {
+        strcpy(g_szRecvFile,  av[1]); /* 休眠預金口座ファイル                  */
+        strcpy(g_szLogFile,   av[2]); /* 処理結果ファイル                      */
+    }
+    else {
+        sprintf (g_szDtlMsg,"休眠預金口座ファイル 処理結果ファイル");
+        send_err (m$invalid_parameter, ERROR, g_szDtlMsg, NULL, NULL, G_STATION);
+        exit_code = ERROR;
+        goto initialize_end;
+
+    }
+
+    /* 差分更新ファイルのオープン */
+    if(( g_pfRecvFile = fopen( g_szRecvFile, "r" )) == NULL ) {
+        sprintf( g_szDtlMsg, "ファイル%sのオープンに失敗しました。", g_szRecvFile );
+        send_err( m$file_open, errno, g_szDtlMsg, NULL, NULL, G_STATION );
+        exit_code = ERROR;
+        goto initialize_end;
+    }
+    file_open_flag1 =1;
+
+    /* 処理結果ファイルへのオープン */
+    if (( g_pfLogFile = fopen( g_szLogFile, "w" )) == NULL ) {
+        sprintf( g_szDtlMsg, "ファイル%sのオープンに失敗しました。", g_szLogFile );
+        send_err( m$file_open, errno, g_szDtlMsg, NULL, NULL, G_STATION );
+        exit_code = ERROR;
+        goto initialize_end;
+    }
+    file_open_flag2 =1;
+
+initialize_end:
+
+    if ( exit_code != NORMAL ) {
+        send_err( m$abend_process, ERROR, process_name, "", "", G_STATION );
+        exit ( exit_code );    
+    }
+
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   int checkFilles( RECV_FILE_DATA *pData,char *g_szDtlMsg )               */
+/*                                                                           */
+/* Description:                                                              */
+/*   各種チェック                                                            */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  --------------------------------------- */
+/* RECV_FILE_DATA  *pData        I   休眠預金口座ファイル格納エリア          */
+/* g_szDtlMsg      char*         I                                           */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   None                                                                    */
+/*                                                                           */
+/* Return Code:                                                              */
+/*        NORMAL: 正常                                                       */
+/*        ERROR : データ不正                                                 */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int checkFilles( RECV_FILE_DATA *pData, char *g_szDtlMsg )
+{
+
+    int  rc = 0;
+
+    /* ---------------- */
+    /* ホスト変数初期化 */
+    /* ---------------- */
+    
+    /* 契約者番号 */
+    memset( h_ContractorID, 0x00, sizeof(h_ContractorID) );
+    
+    /* CIFNO */
+    memset( h_CIFNO, 0x00, sizeof(h_CIFNO) );
+    
+    /* 承認者・登録者・更新者 */
+    memset( h_ChangeName, 0x00, sizeof(h_ChangeName) );
+    strcpy( h_ChangeName, "SPV");
+    
+    /* 処理区分（解約フラグ）*/
+    h_CancellFlg = 9;
+    
+    /* 更新フラグ */
+    h_UpdateFlg = 0;
+    
+    /* -------------------------------------- */
+    /* 休眠預金口座ファイルのチェック         */
+    /* ホスト変数へのデータセット             */
+    /* -------------------------------------- */
+
+    /* 改行コード */
+    if( pData->lf[0] != 0x0a ) {
+        strcpy( g_szDtlMsg,
+                "休眠預金口座ファイルに改行コードの設定がありません。");
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+
+
+    /* 契約者番号 */
+    rc = checkData(pData->contractor_id, sizeof(pData->contractor_id),
+                   "契約者番号", h_ContractorID, g_szDtlMsg);
+    if (rc != NORMAL){
+        return(ERROR);
+    }
+
+    /* CIFNO */
+    rc = checkData(pData->cif_no, sizeof(pData->cif_no),
+                   "CIFNO", h_CIFNO, g_szDtlMsg);
+    if (rc != NORMAL){
+        return(ERROR);
+    }
+
+    return(NORMAL);
+
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   int checkData( char *pcheck_data, int data_size, char *pmsg,            */
+/*                  char *change_data )                                      */
+/*                                                                           */
+/* Description:                                                              */
+/*   各種チェック                                                            */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* char            *pchack_data  I   チェック対象データ                      */
+/* int             data_size     I   チェック対象データサイズ                */
+/* char            *pmsg         I   メッセージ文字列                        */
+/* char            *pchange_data O   チェック後データ                        */
+/* g_szDtlMsg      char*        I/O  事象詳細文字列                          */
+/*                                                                           */
+/* Files:                                                                    */
+/*   None                                                                    */
+/*                                                                           */
+/* Tables:                                                                   */
+/*   None                                                                    */
+/*                                                                           */
+/* Return Code:                                                              */
+/*        NORMAL: 正常                                                       */
+/*        ERROR : データ不正                                                 */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int checkData( char *pcheck_data, int data_size, char *pmsg,
+                      char *pchange_data, char *g_szDtlMsg )
+{
+
+    if( pcheck_data[0] == 0x00 || pcheck_data[0] == 0x20 ) {
+        sprintf( g_szDtlMsg,
+                 "[契約者番号=%s CIFNO=%s ] %s の設定がありません。",
+                 h_ContractorID,h_CIFNO, pmsg );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+    else {
+        memcpy( pchange_data, pcheck_data, data_size);
+        rtrim( pchange_data );
+    }
+
+    return(NORMAL);
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*          int statusCheck( char *g_szDtlMsg )                              */
+/* Made by:                                                                  */
+/* Description : 契約者のステータスを確認する                                */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* g_szDtlMsg      char*        I/O  事象詳細文字列                          */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL       : 正常終了                                                */
+/*    ERROR        : 挿入エラー                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int statusCheck( char *g_szDtlMsg )
+{
+    h_TB_COUNT = 0;      /* テーブルカウント */
+    
+    /* TF_顧客属性テーブルに契約者が存在するか確認 */
+    G_POSITION = __LINE__;
+    EXEC SQL SELECT COUNT(*) INTO :h_TB_COUNT
+    FROM TF_顧客属性
+    WHERE CIFNO = :h_CIFNO
+    ; 
+   
+    
+    if( sqlca.sqlcode != 0 ) {
+        sprintf( g_szDtlMsg,
+                "TF_顧客属性テーブルの検索に失敗しました。(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                       sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "SELECT TF_顧客属性", NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+    else if (h_TB_COUNT != 1){
+        sprintf( g_szDtlMsg,
+               "TF_顧客属性に顧客が存在しません。契約者番号:%s、CIFNO:%s ",
+               h_ContractorID, h_CIFNO);
+        send_err ( m$message1, 0, g_szDtlMsg, NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+    
+    h_TB_COUNT = 0;
+    
+    /* TFB_テレバン契約属性テーブルに契約者が存在するか確認 */
+    G_POSITION = __LINE__;
+    EXEC SQL SELECT COUNT(*) INTO :h_TB_COUNT
+    FROM TFB_テレバン契約属性
+    WHERE 契約者番号 = :h_ContractorID
+    ;
+    if( sqlca.sqlcode != 0 ) {
+        sprintf( g_szDtlMsg,
+                "TFB_テレバン契約属性の検索に失敗しました。(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                       sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "SELECT TFB_テレバン契約属性", NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+    else if (h_TB_COUNT != 1){
+        sprintf( g_szDtlMsg,
+               "TFB_テレバン契約属性に顧客が存在しません。契約者番号:%s、CIFNO:%s ",
+               h_ContractorID, h_CIFNO);
+        send_err ( m$message1, 0, g_szDtlMsg, NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+    
+    
+    /* 契約状況のチェック */
+    
+    memset(sqlcmd, 0x00, sizeof(sqlcmd));
+    strcpy(sqlcmd, "SELECT ");
+    strcat(sqlcmd, "TF_顧客属性.テレバン契約, TFB_テレバン契約属性.処理区分 ");
+    strcat(sqlcmd, "FROM ");
+    strcat(sqlcmd, "TF_顧客属性 ");
+    strcat(sqlcmd, "INNER JOIN TFB_テレバン契約属性 ");
+    strcat(sqlcmd, "ON TF_顧客属性.CIFNO = TFB_テレバン契約属性.CIFNO ");
+    strcat(sqlcmd, "WHERE ");
+    strcat(sqlcmd, "TF_顧客属性.CIFNO = ");
+    strcat(sqlcmd, "'");
+    strcat(sqlcmd, h_CIFNO);    
+    strcat(sqlcmd, "'");
+    
+    G_POSITION = __LINE__;
+    EXEC SQL PREPARE sqlcommand FROM :sqlcmd;
+    if( sqlca.sqlcode != 0 ){
+        sprintf( g_szDtlMsg,
+                "TFB_テレバン契約属性の検索(PREPARE)に失敗しました。(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                       sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err( m$emb_error, sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err( m$sql_statment, sqlca.sqlcode, "顧客属性、テレバン契約属性の取得(PREPARE)に失敗", NULL, NULL, G_STATION );
+        return(ERROR);
+    }
+
+    G_POSITION = __LINE__;
+    EXEC SQL DECLARE CUR_01 CURSOR FOR sqlcommand;   
+    if( sqlca.sqlcode != 0 ){
+        sprintf( g_szDtlMsg,
+                "TFB_テレバン契約属性の検索(DECLARE)に失敗しました。(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                       sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err( m$emb_error, sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err( m$sql_statment, sqlca.sqlcode, "顧客属性、テレバン契約属性の取得(DECLARE)に失敗", NULL, NULL, G_STATION );
+        return(ERROR);
+    }
+
+    G_POSITION = __LINE__;
+    EXEC SQL OPEN CUR_01;
+    if( sqlca.sqlcode != 0 ) {
+        sprintf( g_szDtlMsg,
+                "カーソル(CUR_01)オープン・エラー(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                      sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+    
+    G_POSITION = __LINE__;
+    EXEC SQL FETCH CUR_01 
+      INTO 
+        :h_TBContract, 
+        :h_SyoriType;
+        
+    if( sqlca.sqlcode != 0 ) {
+        sprintf( g_szDtlMsg,
+                "TF_顧客属性、TFB_テレバン契約属性の検索に失敗しました。(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                       sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "SELECT TF_顧客属性 INNER JOIN TFB_テレバン契約属性", NULL, NULL, G_STATION);
+        
+        G_POSITION = __LINE__;
+        EXEC SQL CLOSE CUR_01;
+        
+        return(ERROR);
+    }    
+    
+    G_POSITION = __LINE__;
+    EXEC SQL CLOSE CUR_01;
+    
+    if (h_TBContract == TB_KAIYAKU_FLAG && h_SyoriType == TB_KAIYAKU_FLAG){
+        sprintf( g_szDtlMsg,
+               "既に解約済みの顧客です。契約者番号:%s、CIFNO:%s ",
+               h_ContractorID, h_CIFNO);
+        send_err ( m$message1, 0, g_szDtlMsg, NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+    
+    return NORMAL;
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*          int confirmCheck( char *g_szDtlMsg )                             */
+/* Made by:                                                                  */
+/* Description :                                                             */
+/* テレバン契約者の編集中（承認待ちまたは却下待ち）のチェックを行う          */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* g_szDtlMsg      char*        I/O  事象詳細文字列                          */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL       : 正常終了                                                */
+/*    ERROR        : 挿入エラー                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int confirmCheck( char *g_szDtlMsg )
+{
+
+    h_TB_COUNT = 0;      /* 受付テーブルカウント */
+    
+    /* TFB_テレバン契約属性受付に契約者が存在するか確認 */
+    G_POSITION = __LINE__;
+    EXEC SQL SELECT COUNT(*) INTO :h_TB_COUNT
+    FROM TFB_テレバン契約属性受付
+    WHERE 契約者番号 = :h_ContractorID
+    ;
+    
+    if( sqlca.sqlcode != 0 ) {
+        sprintf( g_szDtlMsg,
+                "TFB_テレバン契約属性受付の検索に失敗しました。(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                       sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "SELECT TFB_テレバン契約属性受付", NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+    else if (h_TB_COUNT > 0){
+        sprintf( g_szDtlMsg,
+               "編集中の顧客です。BANK・R画面より承認または却下をしてください。契約者番号:%s、CIFNO:%s ",
+               h_ContractorID, h_CIFNO);
+        send_err ( m$message1, 0, g_szDtlMsg, NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+    
+    h_TB_COUNT = 0;
+    
+    /* TFB_テレバン契約口座受付に契約者が存在するか確認 */
+    G_POSITION = __LINE__;
+    EXEC SQL SELECT COUNT(*) INTO :h_TB_COUNT
+    FROM TFB_テレバン契約口座受付
+    WHERE 契約者番号 = :h_ContractorID
+    ;
+    
+    if( sqlca.sqlcode != 0 ) {
+        sprintf( g_szDtlMsg,
+                "TFB_テレバン契約口座受付の検索に失敗しました。(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                       sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "SELECT TFB_テレバン契約口座受付", NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+    else if (h_TB_COUNT > 0){
+        sprintf( g_szDtlMsg,
+               "編集中の顧客です。BANK・R画面より承認または却下をしてください。契約者番号:%s、CIFNO:%s ",
+               h_ContractorID, h_CIFNO);
+        send_err ( m$message1, 0, g_szDtlMsg, NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+    
+    
+    h_TB_COUNT = 0;
+    
+    /* TFB_テレバン契約振込先受付に契約者が存在するか確認 */
+    G_POSITION = __LINE__;
+    EXEC SQL SELECT COUNT(*) INTO :h_TB_COUNT
+    FROM TFB_テレバン契約振込先受付
+    WHERE 契約者番号 = :h_ContractorID
+    ;
+    
+    if( sqlca.sqlcode != 0 ) {
+        sprintf( g_szDtlMsg,
+                "TFB_テレバン契約振込先受付の検索に失敗しました。(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                       sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "SELECT TFB_テレバン契約振込先受付", NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+    else if (h_TB_COUNT > 0){
+        sprintf( g_szDtlMsg,
+               "編集中の顧客です。BANK・R画面より承認または却下をしてください。契約者番号:%s、CIFNO:%s ",
+               h_ContractorID, h_CIFNO);
+        send_err ( m$message1, 0, g_szDtlMsg, NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+
+    return NORMAL;
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*          int updateContractor( char *g_szDtlMsg )                         */
+/* Made by:                                                                  */
+/* Description : テレバン契約者を解約する                                    */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* g_szDtlMsg      char*        I/O  事象詳細文字列                          */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL       : 正常終了                                                */
+/*    ERROR        : 挿入エラー                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int updateContractor( char *g_szDtlMsg )
+{
+    /* -----------------------------------*/
+    /* TFB_テレバン契約属性テーブルの更新 */
+    /* -----------------------------------*/
+    G_POSITION = __LINE__;
+    EXEC SQL UPDATE TFB_テレバン契約属性 
+        SET
+            契約解除日 = TO_CHAR( SYSDATE, 'YYYYMMDD' ),
+            承認日 = SYSDATE,
+            承認者 = :h_ChangeName,
+            登録日= SYSDATE,
+            登録者 = :h_ChangeName,
+            処理区分 = :h_CancellFlg, 
+            最終更新日 = SYSDATE,
+            最終更新者 = :h_ChangeName
+        WHERE
+            契約者番号  = :h_ContractorID
+        ;
+        
+    if (sqlca.sqlcode != 0){
+        sprintf( g_szDtlMsg, "TFB_テレバン契約属性更新エラー(sqlca.sqlcode=%d)", sqlca.sqlcode );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "UPDATE TFB_テレバン契約属性", NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+
+    /* -----------------------------------*/
+    /* TF_顧客属性テーブルの更新          */
+    /* -----------------------------------*/    
+    EXEC SQL UPDATE TF_顧客属性
+        SET
+            テレバン契約 = :h_CancellFlg, 
+            テレバン契約日 = TO_CHAR( SYSDATE, 'YYYYMMDD' )
+        WHERE
+            CIFNO  = :h_CIFNO
+        ;
+        
+    if (sqlca.sqlcode != 0){
+        sprintf( g_szDtlMsg, "TF_顧客属性更新エラー(sqlca.sqlcode=%d)", sqlca.sqlcode );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "UPDATE TF_顧客属性", NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+    
+    
+    return NORMAL;
+}
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*     putAcctLogFile(int tp, RECV_FILE_DATA *pData, COUNT *dCount, int rc,  */
+/*                                                        char *g_szDtlMsg ) */
+/* Made by:                                                                  */
+/* Description : ログファイル出力                                            */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* tp                int         I    ログタイプ識別                         */
+/* RECV_FILE_DATA    *pData      I    更新対象レコード情報を格納している     */
+/* COUNT             *dCount     I    処理件数を格納している                 */
+/* rc                int         I    処理結果を格納している                 */
+/* g_szDtlMsg        char*      I/O   事象詳細文字列                         */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL: 正常                                                           */
+/*    ERROR : ファイルアクセスエラー                                         */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int putAcctLogFile(int tp, RECV_FILE_DATA *pData, COUNT *dCount, int rc,
+                          char *g_szDtlMsg )
+{
+    AP_D_BTLOG log;
+    char    szTime[EMB_C_DTIME_LEN + 1];
+    time_t  t = time( NULL );
+
+    /* バッファ初期化 */
+    memset( &log, ' ', sizeof(log));
+    log.szDelimit[0] = 0x0a;
+    log.szDelimit1[0] = 0x0a;
+
+    if (tp == L_WRITE_END){
+        sprintf( log.szNote, 
+                 "[ RECORD COUNT:%d <OK>:%d  <NG>:%d ]",
+                 dCount->iRecNum,                    /* 処理件数             */
+                 dCount->iOkNum,                     /* 正常終了             */
+                 dCount->iNgNum );                   /* ERROR終了            */
+
+        /* 処理結果ファイルへの書き込み */
+        if ( fwrite( &log, sizeof(AP_D_BTLOG) - sizeof(log.szNote1) - sizeof(log.szDelimit1),
+                     1, g_pfLogFile ) != 1 ) {
+            send_err ( m$file_write, errno, g_szLogFile, log , NULL, G_STATION);
+            return ERROR;
+        }
+        
+        sprintf ( g_szDtlMsg,
+                "[ RECORD COUNT:%d <OK>:%d  <NG>:%d ]",
+                 dCount->iRecNum,                    /* 処理件数             */
+                 dCount->iOkNum,                     /* 正常終了             */
+                 dCount->iNgNum );                   /* ERROR終了            */
+
+        send_err (  m$message1, NORMAL, g_szDtlMsg, NULL , NULL, G_STATION);
+        
+        /* NG件数がある場合は、ログに出力する */
+        if ( dCount->iNgNum != 0 ) {
+            sprintf( g_szDtlMsg, "処理できないデータが %d 件あります。詳細は処理結果ファイルを確認ください",dCount->iNgNum );
+            send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        }
+
+
+    }else{
+        /* 現状NORMAL正常時は処理しない。（以下に処理だけは残しておく）*/
+        if ( rc == NORMAL ) return NORMAL;
+
+        /* リターンコード編集 */
+        switch( rc ) {
+            case NORMAL:
+                memcpy( log.szRtInfo, "NORMAL",       6); /* 正常終了                  */
+                break;
+            case ERROR:
+                memcpy( log.szRtInfo, "ERROR",        5); /* エラー                    */
+                break;
+            default:
+                memcpy( log.szRtInfo, "NONE",         4); /* その他                    */
+                break;
+        }
+
+        if (rc != NORMAL){
+            memcpy( log.szRtType, " NG ", 4); /* エラー表示    */
+        }
+        else{
+            memcpy( log.szRtType, " OK ", 4); /* 正常終了表示  */
+        }
+        /* 日時 */
+        strftime( szTime, EMB_C_DTIME_LEN + 1, "%Y-%m-%d %H:%M:%S", localtime( &t ));
+        memcpy( log.szDateTime,szTime, EMB_C_DTIME_LEN );
+
+        /* 事象発生詳細レコード番号、事象詳細文字列 */
+        sprintf( log.szNote1, "(%d) %.*s", dCount->iRecNum,
+                                           (unsigned int)strlen(g_szDtlMsg), g_szDtlMsg );
+
+        /* 処理結果ログファイルへの書き込み */
+        if ( fwrite( &log, sizeof(AP_D_BTLOG), 1, g_pfLogFile ) != 1 ){
+            send_err ( m$file_write, errno, g_szLogFile, log , NULL, G_STATION);
+            return ERROR;
+        }
+    }
+
+    return NORMAL;
+}
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*     commit( void )                                                        */
+/* Made by:                                                                  */
+/* Description:ＤＢのコミット                                                */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/*  g_szDtlMsg      *char         O    事象詳細文字列                        */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL : 正常                                                          */
+/*    ERROR  : コミットエラー（システムエラー）                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int commit( void )
+{
+
+    /* ＤＢのコミット */
+    EXEC SQL COMMIT;
+    if (sqlca.sqlcode < 0) {
+        sprintf(g_szDtlMsg,
+                "ＤＢのコミットに失敗しました。(CODE=%ld)",
+                sqlca.sqlcode);
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+
+
+    return NORMAL;
+}
+
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*     rollback( void )                                                      */
+/* Made by:                                                                  */
+/* Description:ＤＢのロールバック                                            */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL : 正常                                                          */
+/*    ERROR  : ロールバックエラー（システムエラー）                          */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int rollback( )
+{
+    
+    /* ＤＢのロールバック */
+    EXEC SQL ROLLBACK WORK;
+    if (sqlca.sqlcode < 0) {
+        sprintf(g_szDtlMsg,
+                "ＤＢのロールバックに失敗しました。(CODE=%ld)",
+                sqlca.sqlcode);
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+
+    return NORMAL;
+}
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*     finalize( int rc, int iRecNum, int iOkNum )                           */
+/* Made by:                                                                  */
+/* Description:終了処理                                                      */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* rc              int           i   リターンコード                          */
+/* iRecNum         int           i   入力件数                                */
+/* iOkNum          int           i   成功件数                                */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static void finalize( int rc, int iRecNum, int iOkNum )
+{
+
+    /* ファイルのクローズ */
+    if ( file_open_flag1 == 1 ) {
+        fclose( g_pfRecvFile );
+    }
+    if ( file_open_flag2 == 1 ) {
+        fclose( g_pfLogFile );
+    }
+
+    exit( rc );
+}

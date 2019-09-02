@@ -11,6 +11,7 @@
 # %00 | 13/10/XX | ISID          | First Edition.
 # %01 | 14/06/24 | ISID          | Error Code 追加
 # %02 | 15/01/14 | 土居　康一郎  | あおぞら銀行 1.0次対応
+# %03 | 19/07/29 | 武市  清嵩    | あおぞら銀行 休眠預金口座対応
 #============================================================================
 
 # ============================================================================
@@ -175,6 +176,7 @@ $global:M_LIQUID_DEPOSIT_BASE  ="D_KRS"     # 流動性預金ファイル
 $global:M_PERSONNEL_BASE     ="D_JIF"       # 人事情報ファイル
 $global:M_PROFILE_BASE       ="D_PRO"       # 顧客プロファイル
 $global:M_BHISTORY_BASE      ="D_LGD"       # 営業店コンタクト履歴ファイル
+$global:M_DACCOUNT_BASE      ="D_KYK"       # 休眠預金口座ファイル (休眠預金口座対応にて 追加)
 
 $global:M_OPEINFO_BASE       ="S_IB1"       # オペレータ情報ファイル
 # $global:M_CONTRACT_BASE      ="S_CZU"       # テレバン契約属性ファイル (1.0次にて 削除)
@@ -250,6 +252,7 @@ $global:PROFILE_VIEWNAME ="TF_顧客プロファイル"
 $global:PERSONNEL_BASE_TBNAME ="TM_ユーザ"
 $global:PROFILE_BASE_TBNAME ="TF_顧客プロファイル"
 $global:BHISTROY_BASE_TBNAME ="TH_営業店履歴"
+$global:TBCUTOMER_BASE_TBNAME ="TFB_テレバン契約属性"   #(休眠預金口座対応にて 追加)
 
 
 
