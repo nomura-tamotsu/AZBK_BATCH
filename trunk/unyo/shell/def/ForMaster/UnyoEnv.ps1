@@ -13,6 +13,7 @@
 # %00 | 14/03/11 | R.YAMANO      | First Edition
 # %01 | 17/02/01 | R.YAMANO      | 保守対応-ログメンテナンス機能改善対応
 # %02 | 18/12/05 | K.TAKEICHI    | NASストレージ更改対応
+# %03 | 20/07/22 | A.MIYAMOTO    | 本人確認資料保管対応
 #============================================================================
 #
 # ディレクトリ定義
@@ -40,6 +41,12 @@ ${global:UNYO_DB_EXTRCV_DIR} = "E:\extdata\rcv"
 ${global:UNYO_DB_EXTSND_BKD} = "${UNYO_DB_EXTSND_DIR}\backup"
 ${global:UNYO_DB_EXTRCV_BKD} = "${UNYO_DB_EXTRCV_DIR}\backup"
 ${global:UNYO_SQL_FLBKUP_DIR} = "D:\SQLBackup\"
+# 本人確認資料転送用一時ディレクトリ
+${global:TMP_REFERENCE_DIR} = "D:\BANKR_CC\image\@@INSTANCENAME@@\reference"
+${global:TMP_SAVING_DIR} = "D:\BANKR_CC\image\@@INSTANCENAME@@\saving"
+${global:TMP_FAILURES_DIR} = "D:\BANKR_CC\image\@@INSTANCENAME@@\failures"
+# 本人確認資料転送用一時ディレクトリ内インスタンスディレクトリ名
+${global:INSTANCE_DIR_NAMES} = "brtabazb,brtabtrn"
 
 #----------------------------------------------------------------------
 # DATE FORMAT PATTERN
@@ -167,7 +174,8 @@ ${global:COM_NAS_BASE_DIRS}  = "\\${COM_NAS_HOST_NAME}\dd_tbs_pw"
 ${global:COM_NASWT_TIME}   = 60
 # ループ処理回数
 ${global:COM_NASLP_CNTS}   = 60
-
+# 本人確認資料保存先ディレクトリ
+${global:COM_NAS_IMAGE_DIRS}  = "${global:COM_NAS_BASE_DIRS}\Image\@@INSTANCENAME@@"
 
 #----------------------------------------------------------------------
 # SERVICE NAME
