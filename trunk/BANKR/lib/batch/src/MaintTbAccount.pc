@@ -1,0 +1,2790 @@
+/*==========================================================================*/
+/* Copyright　Information Services International-Dentsu, Ltd.   　          */
+/*==========================================================================*/
+/*                                                                          */
+/* SYSTEM           : BANK・R－CC                                           */
+/*                                                                          */
+/* PROGRAM NAME     : テレバン利用口座メンテナンス                          */
+/*                                                                          */
+/* MODULE NAME      : MaintTbAccount                                        */
+/*                                                                          */
+/* FUNCTION         : テレバン利用口座メンテナンスを行う                    */
+/*                                                                          */
+/*                                                                          */
+/* CALLING MODULE   : Main Module.                                          */
+/*                                                                          */
+/* CALLED MODULE    : send_err, errhandler, db_connect                      */
+/*                                                                          */
+/* ENTRY POint      : Main Module.                                          */
+/*                                                                          */
+/* INPUT            : None                                                  */
+/*                                                                          */
+/* EXIT             : 正常終了       ・・・NORMAL(0)                        */
+/*                    異常終了       ・・・ERROR (9)                        */
+/*                                                                          */
+/* Mod   yy/mm/dd   Coder           Comment                                 */
+/*-----+----------+-------------+-------------------------------------------*/
+/* %00 | 20/06/29 | Y.Maruyama  | First Edition.                            */
+/*==========================================================================*/
+/*---------------------------------------------------------------------------*/
+/* Standard include specification                                            */
+/*---------------------------------------------------------------------------*/
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <ctype.h>
+#include <errno.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <time.h>
+
+/*---------------------------------------------------------------------------*/
+/* User defined include specification                                        */
+/*---------------------------------------------------------------------------*/
+#include "msg.h"
+#include "common.h"
+#include "batchcommon.h"
+#include "apl_common.h"
+
+EXEC SQL INCLUDE mbproc.h;
+
+/*---------------------------------------------------------------------------*/
+/* Internal macro definition                                                 */
+/*---------------------------------------------------------------------------*/
+
+typedef struct _KOZA_DATA {
+    char	branch_id	     [6];     /* 店番 */
+    char	accnt_type       [6];     /* 科目ID */
+    char	accnt_no        [16];     /* 口座番号 */
+    char	shikumi_yokin    [2];     /* 仕組預金 */
+    char	tsusho_kbn_id    [5];     /* 通証区分ID */
+    char	tsuka_ryakusyo  [11];     /* 通貨略称 */
+    char	start_date       [9];     /* 口座開設年月日・登録年月日 */
+    char	flg_toshin       [2];     /* 投信口座フラグ */
+    char	flg_mousikomiten [2];     /* TB申込店フラグ */
+    char	flg_not_ins      [2];     /* 対象外フラグ */
+    int 	sort_kamoku         ;     /* ソート順（科目） */
+} KOZA_DATA ;
+
+typedef struct _COUNT {
+    int  iRecNum;                              /* 処理レコード件数           */
+    int  iOkNum ;                              /* 正常終了レコード件数       */
+    int  iNgNum ;                              /* 異常終了レコード件数       */
+} COUNT;
+
+/*---------------------------------------------------------------------------*/
+/* User Local defined  specification                                         */
+/*---------------------------------------------------------------------------*/
+#define L_WRITE_END                     1
+#define L_WRITE_LOG                     0
+#define NOMAL                    0
+#define TRUE                     1
+#define FALSE                    0
+#define COUNT_ERROR             -1
+#define FLG_ON                  "*"
+#define YAKKAN_DATE             "'20201221'"
+#define BANK_SHITEN             "'181','182','183','184','185'"
+#define NOT_YUJINTEN            "'001','100','181','182','183','184','185'"
+#define KBN_KAIYAKU             "9"
+#define TENBAN_CC_HONNBU        "'001','100'"
+#define REGIST_DATE             "'20060412'"
+#define BANK_ID_JIGYOU          "'0398'"
+#define KAMOKU_FUTSU_TOSHIN     "1"
+
+/*---------------------------------------------------------------------------*/
+/* Global variable specification                                             */
+/*---------------------------------------------------------------------------*/
+/* 設定ファイル項目（ホスト変数以外）*/
+char g_szDtlMsg           [AP_C_NOTE_LEN_H];         /* 事象詳細文字列       */
+char g_szLogFile        [AP_CONFIG_LINE];            /* 処理結果ファイル     */
+FILE *g_pfLogFile;
+
+int  count_koteisei;							     /* カウント（個別明細固定性預金口座）    */
+int  count_ryudosei;							     /* カウント（個別明細流動性預金口座）    */
+int  count_gaika;								     /* カウント（個別明細外貨預金口座）      */
+int  count_toshin;								     /* カウント（個別明細投信口座）          */
+int  count_all;								         /* カウント（全口座）                    */
+int  count_line;								     /* カウント（ライン）                    */
+
+
+char tsuka_id                          [10];		 /* 通貨ID                  　　　　　　  */
+
+int  tm_year;                                        /* 現在年                  　　　　　　  */
+int  tm_mon;                                         /* 現在月                  　　　　　　  */
+int  tm_mday;                                        /* 現在日                  　　　　　　  */
+
+int  result_sort;
+
+int  i;
+int  j;
+
+char    process_name[56];
+
+
+/*---------------------------------------------------------------------------*/
+/* Host Variable                                                             */
+/*---------------------------------------------------------------------------*/
+EXEC SQL INCLUDE SQLCA;
+EXEC SQL BEGIN DECLARE SECTION;
+    /* ＤＢ接続情報 */
+    char sqlcmd[2048];
+    char sqlcmd_local[2048];
+
+    /* 共通 */
+    char	h_ContractorID    [11];                     /*  契約者番号                */
+    short	h_ind_ContractorID;
+    char	h_CIFNO           [11];                     /*  CIFNO                     */
+    short	h_ind_CIFNO;
+    
+    /* TF_顧客属性テーブル */
+    char	h_TBContract       [1+1];                     /* テレバン契約               */
+    short	h_ind_TBContract;
+    
+    /* TFB_テレバン契約属性 */
+    char	h_ZentenFlg        [1+1];                     /* 全店口座登録フラグ         */
+    short	h_ind_ZentenFlg;
+    char	h_TBMoushikomiten  [3+1];                     /* TB申込店                   */
+    short	h_ind_TBMoushikomiten;
+    char	h_YujintenFlg      [1+1];                     /* 有人店フラグ               */
+    short	h_ind_YujintenFlg;
+    char	h_DateOfBirth      [8+1];                     /* 生年月日                   */
+    short	h_ind_DateOfBirth;
+    
+    /* 各口座テーブル */
+    char	h_BranchId	       [3+1];                     /* 店番                       */
+    short	h_ind_BranchId;
+    char	h_AccntType        [6];                     /* 科目ID                     */
+    short	h_ind_AccntType;
+    char	h_AccntNo         [15];                     /* 口座番号                   */
+    short	h_ind_AccntNo;
+    char	h_ShikumiYokin     [2];                     /* 仕組預金                   */
+    short	h_ind_ShikumiYokin;
+    char	h_TsushoKbnId      [5];                     /* 通証区分ID                 */
+    short	h_ind_TsushoKbnId;
+    char	h_TsukaRyakusyo   [11];                     /* 通貨略称                   */
+    short	h_ind_TsukaRyakusyo;
+    char	h_StartDate        [9];                     /* 口座開設年月日・登録年月日 */
+    short	h_ind_StartDate;
+    
+    /* 投信口座テーブル */
+    char	h_FurikomiShitenID   [6];                   /* 振込支店ID                 */
+    short	h_ind_FurikomiShitenID;
+    char	h_AccntTypeTsn       [6];                   /* 科目ID（投信口座）         */
+    short	h_ind_AccntTypeTsn;
+    char	h_AccntNoTsn         [15];                   /* 振込口座                   */
+    short	h_ind_AccntNoTsn;
+    
+    /* 登録項目 */
+    char	h_ins_ContractorID    [11];                 /* 契約者番号（登録）         */
+    char	h_ins_BranchId	       [5];                 /* 店番（登録）               */
+    char	h_ins_CIFNO           [11];                 /* CIFNO（登録）              */
+    char	h_ins_AccntType        [6];                 /* 科目ID（登録）             */
+    char	h_ins_AccntNo         [15];                 /* 口座番号（登録）           */
+    char	h_ins_TsukaId          [4];                 /* 通貨ID（登録）             */
+    char	h_ins_FlgToshin        [2];               /* 投信フラグ（登録）         */
+    
+    long	h_TB_COUNT;                                 /* カウント                   */
+    
+    
+
+EXEC SQL END DECLARE SECTION;
+
+/*---------------------------------------------------------------------------*/
+/* Internal function prototype                                               */
+/*---------------------------------------------------------------------------*/
+extern int send_err();
+extern void errhandler();
+extern int db_connect();
+void rtrim();
+
+static int chkDaihyoKoza( char *g_szDtlMsg );
+static int chkKeiyakusyaState( char *g_szDtlMsg );
+static int countKoteisei( char *g_szDtlMsg );
+static int getKoteisei( KOZA_DATA **data, int data_count, char *g_szDtlMsg );
+static int countRyudosei( char *g_szDtlMsg );
+static int getRyudosei( KOZA_DATA **data, int data_count, int get_data_count, char *g_szDtlMsg );
+static int countGaika( char *g_szDtlMsg );
+static int getGaika( KOZA_DATA **data, int data_count, int get_data_count, char *g_szDtlMsg );
+static int countToshin( char *g_szDtlMsg );
+static int getToshin( KOZA_DATA **data, int data_count, int get_data_count, char *g_szDtlMsg );
+static void chgAccntType( KOZA_DATA **data, int count_all );
+static int compare( const void *p, const void *q );
+static int compareKozaNo( const void *p, const void *q );
+static int compareStartDate( const void *p, const void *q );
+static int compareKamoku( const void *p, const void *q );
+static int compareFlgMousikomiten( const void *p, const void *q );
+static int compareFlgToshin( const void *p, const void *q );
+static int chkBeforeIns( char *accnt_no, char *accnt_type, char *g_szDtlMsg );
+static int chkToshinKozaState( char *accnt_no, char *g_szDtlMsg );
+static int insKoza( KOZA_DATA *data, char *h_ContractorID, char *g_szDtlMsg );
+static int updToshinKbn( char *accnt_no, char *g_szDtlMsg );
+static int chkDateOfBirth( );
+static int Trim(char *s);
+
+static int  putAcctLogFile(int tp,KOZA_DATA **data,COUNT *dCount,int rc, char *g_szDtlMsg );
+static int  memoryFree( KOZA_DATA *data_1, KOZA_DATA **data_2, int count_all );
+static int  commit( void );
+static int  rollback( void );
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*   int main( int argc, char *argv[] )                                      */
+/*                                                                           */
+/* Made by:                                                                  */
+/* Description:                                                              */
+/*      メイン処理                                                           */
+/*                                                                           */
+/* Arguments:                                                                */
+/* Type     Name              I/O    Content                                 */
+/* -------- ----------------- --- ------------------------------------------ */
+/*    int    argc              I  引数の数                                   */
+/*    char  *argv[]                                                          */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+int main( int argc, char *argv[] )
+{
+/*--------------------------------------------------------------------------*/
+/*                      LOCAL VARIABLE DECLARATIONS                         */
+/*--------------------------------------------------------------------------*/
+    int         rc;
+    int         exitcode;
+    int         db_connect_flag;			/* ＤＢ接続フラグ               */
+    COUNT       dCount; 
+    KOZA_DATA   *dData; 
+    KOZA_DATA   **pData; 
+    KOZA_DATA   *tmp; 
+    int         count = 0; 
+    int         count_all = 0; 
+    int         count_kokyaku = 0; 
+    int         count_line = 0; 
+/*==========================================================================*/
+/*      INITIALIZATION                                                      */
+/*==========================================================================*/
+
+
+	/*-----------------------------*/
+	/* Initialize environment      */
+	/*-----------------------------*/
+	exitcode = NORMAL;
+	db_connect_flag = 0;
+	/*-----------------------------*/
+	/* Print process start message */
+	/*-----------------------------*/
+	strcpy( G_STATION, "MaintTbAccount" );
+
+	memset(process_name,0x00,sizeof(process_name));
+	strcpy(process_name,"テレバン利用口座メンテナンス");
+
+	send_err( m$start_process, NORMAL, process_name, "", "", G_STATION );
+	
+    memset( &dCount, 0x00, sizeof( dCount ) );
+
+	/*-----------------------------*/
+	/* Setup error handler routine */
+	/*-----------------------------*/
+	EXEC SQL WHENEVER SQLERROR DO errhandler() ;
+
+	/*-----------------------------*/
+	/* Connect to database         */
+	/*-----------------------------*/
+	G_POSITION = __LINE__;
+	rc = db_connect();
+	if( rc != 0 ) {
+		send_err( m$db_connect, rc, NULL, NULL, NULL, G_STATION );
+		exitcode = ERROR;
+		goto ENDPROC;
+	}
+	db_connect_flag = 1;
+
+
+ 
+    /*----------------------------------------*/
+    /*      テレバン利用口座メンテナンス      */
+    /*----------------------------------------*/
+
+    /*
+    **  テレバン契約済みの顧客情報を取得し、Loopする。
+    */
+    
+    memset(sqlcmd, 0x00, sizeof(sqlcmd));
+    strcpy(sqlcmd, "SELECT ");	
+    strcat(sqlcmd, "TF_顧客属性.CIFNO, ");
+    strcat(sqlcmd, "TF_顧客属性.テレバン契約, ");
+    strcat(sqlcmd, "TFB_テレバン契約属性.契約者番号, ");
+    strcat(sqlcmd, "CASE WHEN ");
+    strcat(sqlcmd, "TFB_テレバン契約属性.約款同意日 >= ");
+    strcat(sqlcmd, YAKKAN_DATE);
+    strcat(sqlcmd, " THEN '");
+    strcat(sqlcmd, FLG_ON);
+    strcat(sqlcmd, "' ELSE '' ");
+    strcat(sqlcmd, "END AS 全店口座登録フラグ, ");
+    strcat(sqlcmd, "TRIM(TFB_テレバン契約属性.TB申込店), ");
+    strcat(sqlcmd, "CASE WHEN ");
+    strcat(sqlcmd, "TFB_テレバン契約属性.TB申込店 NOT IN( ");
+    strcat(sqlcmd, NOT_YUJINTEN);
+    strcat(sqlcmd, " ) THEN '");
+    strcat(sqlcmd, FLG_ON);
+    strcat(sqlcmd, "' ELSE '' ");
+    strcat(sqlcmd, "END AS 有人店フラグ, ");
+    strcat(sqlcmd, "TFB_テレバン契約属性.生年月日 ");
+    strcat(sqlcmd, "FROM ");
+    strcat(sqlcmd, "TF_顧客属性 LEFT JOIN ");
+    strcat(sqlcmd, "TFB_テレバン契約属性 ON TRIM(TF_顧客属性.CIFNO) = TRIM(TFB_テレバン契約属性.CIFNO) ");
+    strcat(sqlcmd, "WHERE ");
+    strcat(sqlcmd, "TF_顧客属性.テレバン契約 != '");
+    strcat(sqlcmd, KBN_KAIYAKU);    
+    strcat(sqlcmd, "' "); 
+    strcat(sqlcmd, "AND TFB_テレバン契約属性.処理区分 != '");
+    strcat(sqlcmd, KBN_KAIYAKU);    
+    strcat(sqlcmd, "' "); 
+    
+    G_POSITION = __LINE__;
+    EXEC SQL PREPARE sqlcommand_kokyaku FROM :sqlcmd;
+    if( sqlca.sqlcode != 0 ){
+        sprintf( g_szDtlMsg,
+                "顧客情報の検索(PREPARE)に失敗しました。(sqlca.sqlcode=%d)", sqlca.sqlcode);
+        send_err( m$emb_error, sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err( m$sql_statment, sqlca.sqlcode, "顧客情報の取得(PREPARE)に失敗", NULL, NULL, G_STATION );
+		exitcode = ERROR;
+		goto ENDPROC;
+    }
+
+    G_POSITION = __LINE__;
+    EXEC SQL DECLARE CUR_KOKYAKU CURSOR FOR sqlcommand_kokyaku;   
+    
+    if( sqlca.sqlcode < 0 ) {
+        sprintf( g_szDtlMsg,
+                "顧客情報の検索(DECLARE)に失敗しました。(sqlca.sqlcode=%d)", sqlca.sqlcode);
+        send_err( m$emb_error, sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err( m$sql_statment, sqlca.sqlcode, "顧客情報の取得(DECLARE)に失敗", NULL, NULL, G_STATION );
+		exitcode = ERROR;
+		goto ENDPROC;
+    }
+
+    G_POSITION = __LINE__;
+    EXEC SQL OPEN CUR_KOKYAKU;
+    
+    if( sqlca.sqlcode < 0 ) {
+        sprintf( g_szDtlMsg,
+                "カーソル(CUR_KOKYAKU)オープン・エラー(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                      sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+		exitcode = ERROR;
+		goto ENDPROC;
+    }
+
+    while( 1 ) {
+        dData = NULL;
+        pData = NULL;
+        memset( &dData,                          0x00, sizeof(KOZA_DATA) );
+        memset( &pData,                          0x00, sizeof(KOZA_DATA*) );
+        memset( h_CIFNO,                         0x00, sizeof(h_CIFNO) );
+        memset( h_TBContract,                    0x00, sizeof(h_TBContract) );
+        memset( h_ContractorID,                  0x00, sizeof(h_ContractorID) );
+        memset( h_ZentenFlg,                     0x00, sizeof(h_ZentenFlg) );
+        memset( h_TBMoushikomiten,               0x00, sizeof(h_TBMoushikomiten) );
+        memset( h_YujintenFlg,                   0x00, sizeof(h_YujintenFlg) );
+        memset( h_DateOfBirth,                   0x00, sizeof(h_DateOfBirth) );  
+        
+        count = 0;
+        count_all = 0;
+        count_line = 0;
+        count_koteisei = 0;
+        count_ryudosei = 0;
+        count_gaika = 0;
+        count_toshin = 0;
+        count_kokyaku++;
+
+        G_POSITION = __LINE__;
+        EXEC SQL FETCH CUR_KOKYAKU INTO
+            :h_CIFNO              :h_ind_CIFNO,                /* CIFNO */
+            :h_TBContract         :h_ind_TBContract,           /* テレバン契約 */
+            :h_ContractorID       :h_ind_ContractorID,         /* 契約者番号 */
+            :h_ZentenFlg          :h_ind_ZentenFlg,            /* 全店口座登録フラグ */
+            :h_TBMoushikomiten    :h_ind_TBMoushikomiten,      /* TB申込店 */
+            :h_YujintenFlg        :h_ind_YujintenFlg,          /* 有人店フラグ */
+            :h_DateOfBirth        :h_ind_DateOfBirth;          /* 生年月日 */
+        
+        if( sqlca.sqlcode < 0 ){
+            send_err( m$sql_statment, sqlca.sqlcode, "FETCH CUR_KOKYAKU", NULL, NULL, G_STATION );
+            exitcode = ERROR;
+            goto ENDPROC;
+        }
+
+        if( sqlca.sqlcode == ORA_NOF ){
+            if( count_kokyaku == 0 ){
+                send_err ( m$message1,NORMAL,"TF_顧客属性、TFB_テレバン契約属性に該当データなし"
+                    ,NULL,NULL,G_STATION);
+            }
+            goto ENDPROC;
+        }
+
+        /* ------------------------------------------------- */
+        /* テレバン契約口座に代表口座が設定済みの顧客か確認  */
+        /* ------------------------------------------------- */
+        if ( (rc = chkDaihyoKoza( g_szDtlMsg )) != NORMAL ){
+            continue;
+        }
+        
+        /* ----------------------------------------------------------------- */
+        /* テレバン契約者の編集中（承認待ちまたは却下待ち）のチェックを行う  */
+        /* ----------------------------------------------------------------- */
+        if ( (rc = chkKeiyakusyaState( g_szDtlMsg )) != NORMAL ){
+            continue;
+        }
+        
+        /* ------------------------------------------ */
+        /* 登録対象の口座を取得する                   */
+        /* ------------------------------------------ */ 
+                
+        /* TF_個別明細固定性預金から契約口座件数を取得する */
+        
+        count = countKoteisei( g_szDtlMsg );
+        if(count > 0){
+			count_koteisei = count;
+			count_all += count_koteisei;
+        }
+                
+        /* TF_個別明細流動性預金から契約口座件数を取得する */
+        count = countRyudosei( g_szDtlMsg );
+        if(count > 0){
+			count_ryudosei = count;
+			count_all += count_ryudosei;
+        }
+        
+        /* TF_個別明細外貨預金から契約口座情報を取得する */
+        count = countGaika( g_szDtlMsg );
+        if(count > 0){
+			count_gaika = count;
+			count_all += count_gaika;
+        }
+        
+        /* 生年月日と当バッチ処理日から年齢を算出し、 
+        ** 20歳以上の場合は利用口座の登録対象のため、
+        ** TF_個別明細投信口座から契約口座情報を取得する
+        */
+        if(chkDateOfBirth() == TRUE){
+        	count = countToshin( g_szDtlMsg );
+        	if(count > 0){
+        	    count_toshin = count;
+        	    count_all += count_toshin;
+        	}
+        }
+        else{
+        	count_toshin = 0;
+        }
+        
+        /* 登録対象の口座が存在しない場合は次の顧客へ */
+        if( count_all == 0 ){
+			continue;
+        }
+        
+        /* 配列のメモリを確保する */
+        dData = (KOZA_DATA*)malloc(count_all * sizeof(KOZA_DATA));
+        pData = (KOZA_DATA**)malloc(count_all * sizeof(KOZA_DATA*));
+        for (i = 0; i < count_all; i++){
+		    pData[i] = &dData[i];
+		}
+        
+        /* TF_個別明細固定性預金から契約口座情報を取得する */
+        if(count_koteisei > 0){
+                
+            if ( (rc = getKoteisei( pData, count_line, g_szDtlMsg )) != NORMAL ){
+                /* メモリ開放 */
+                memoryFree( dData, pData, count_all );
+                
+                continue;
+            }
+            
+            count_line += count_koteisei;
+        }        
+        
+        /* TF_個別明細流動性預金から契約口座情報を取得する */
+        if(count_ryudosei > 0){
+			
+            if ( (rc = getRyudosei( pData, count_line, count_ryudosei,  g_szDtlMsg )) != NORMAL ){
+                /* メモリ開放 */
+                memoryFree( dData, pData, count_all );
+                
+                continue;
+            }
+            count_line += count_ryudosei;
+        }
+                
+        /* TF_個別明細外貨預金から契約口座情報を取得する */
+        if(count_gaika > 0){
+        
+            if ( (rc = getGaika( pData, count_line, count_gaika,  g_szDtlMsg )) != NORMAL ){
+                /* メモリ開放 */
+                memoryFree( dData, pData, count_all );
+                
+                continue;
+            }
+            count_line += count_gaika;
+        }
+                
+        /* TF_個別明細投信口座から契約口座情報を取得する */
+        if(count_toshin > 0){
+        
+            if ( (rc = getToshin( pData, count_line, count_toshin,  g_szDtlMsg )) != NORMAL ){
+                /* メモリ開放 */
+                memoryFree( dData, pData, count_all );
+                
+                continue;
+            }
+        }
+                
+        /* ------------------------------------------ */
+        /* 科目IDを変換する                           */
+        /* ------------------------------------------ */        
+        chgAccntType( pData, count_all );
+                
+        /* ------------------------------------------ */
+        /* 口座情報を並び替える                       */
+        /* ------------------------------------------ */    
+        
+        for(i = 0; i < count_all; i++){
+            for(j = i+1; j < count_all; j++){
+                if( compare(pData[i], pData[j]) > 0){
+                     tmp = pData[i];
+                     pData[i] = pData[j];
+                     pData[j] = tmp;
+                }
+            }
+        }
+                
+        /* ------------------------------------------ */
+        /* 口座登録処理                               */
+        /* ------------------------------------------ */    
+        
+        for(i = 0; i < count_all; i++)
+        {         
+    		/* 登録対象外のデータの場合は処理を抜ける */
+    		if( strcmp( pData[i]->flg_not_ins, FLG_ON ) == 0 ){
+	            continue;
+    		}
+    		
+        	dCount.iRecNum++;
+        	
+	        /* 口座登録処理前の各種チェックを行う */
+	        if ( (rc = chkBeforeIns( pData[i]->accnt_no, pData[i]->accnt_type, g_szDtlMsg )) != NORMAL ){	            
+                continue;
+	        }
+	        
+	        /* TFB_テレバン契約口座登録処理 */
+	        if ( (rc = insKoza( pData[i], h_ContractorID, g_szDtlMsg )) == NORMAL ) {
+				/* ＤＢのコミット */
+				rc = commit();
+        		dCount.iOkNum++;
+			}
+			else{
+				rollback();
+        		dCount.iNgNum++;
+			}
+        }
+        
+        /* ログ出力 */
+        putAcctLogFile(L_WRITE_LOG, pData, &dCount, rc, g_szDtlMsg );
+                
+        /* メモリ開放 */
+        memoryFree( dData, pData, count_all );
+        
+    } /* while loop end */
+
+
+    /*--------------------------------------------------------------------------*/
+    /*                              終了処理                                    */
+    /*--------------------------------------------------------------------------*/
+
+ENDPROC:    
+	
+	/* ＤＢ切断 */
+	
+    EXEC SQL CLOSE CUR_KOKYAKU;
+    
+	if( db_connect_flag == 1 ){
+		if ( exitcode == NORMAL ){
+			EXEC SQL COMMIT WORK RELEASE;
+			;
+		}
+		else{
+			EXEC SQL ROLLBACK WORK RELEASE;
+		}
+	}
+
+	/* 終了メッセージ出力 */
+	if ( exitcode == NORMAL ){
+		send_err( m$stop_process, NORMAL, process_name, "", "", G_STATION );  
+	}
+	else {
+		send_err( m$abend_process, ERROR, process_name, "", "", G_STATION );
+	}
+
+	exit(exitcode);
+
+}
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*          int chkDaihyoKoza( char *g_szDtlMsg )                            */
+/* Made by:                                                                  */
+/* Description : テレバン契約口座に代表口座が設定済みの顧客か確認            */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* g_szDtlMsg      char*        I/O  事象詳細文字列                          */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL       : 正常終了                                                */
+/*    ERROR        : 挿入エラー                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int chkDaihyoKoza( char *g_szDtlMsg )
+{
+
+    /* テレバン契約口座に代表口座が設定済みの顧客か確認 */
+    h_TB_COUNT = 0;      /* テーブルカウント */
+    
+    G_POSITION = __LINE__;
+    EXEC SQL SELECT COUNT(*) INTO :h_TB_COUNT
+    FROM TFB_テレバン契約口座
+    WHERE 契約者番号 = :h_ContractorID
+    AND 代表口座区分 = '1'
+    ; 
+   
+    if( sqlca.sqlcode != 0 ) {
+        sprintf( g_szDtlMsg,
+                "TFB_テレバン契約口座テーブルの検索に失敗しました。(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                       sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "SELECT TFB_テレバン契約口座", NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+    else if (h_TB_COUNT == 0 || h_TB_COUNT > 1){
+        return(ERROR);
+    }
+                    
+    return NORMAL;
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*          int chkKeiyakusyaState( char *g_szDtlMsg )                       */
+/* Made by:                                                                  */
+/* Description : テレバン契約者の編集中（承認待ちまたは却下待ち）            */
+/*               のチェックを行う                                            */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* g_szDtlMsg      char*        I/O  事象詳細文字列                          */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL       : 正常終了                                                */
+/*    ERROR        : 挿入エラー                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int chkKeiyakusyaState( char *g_szDtlMsg )
+{
+
+    /* TFB_テレバン契約属性受付に契約者が存在するか確認 */
+    h_TB_COUNT = 0;      /* テーブルカウント */
+    
+    G_POSITION = __LINE__;
+    EXEC SQL SELECT COUNT(*) INTO :h_TB_COUNT
+    FROM TFB_テレバン契約属性受付
+    WHERE 契約者番号 = :h_ContractorID
+    ; 
+   
+    if( sqlca.sqlcode != 0 ) {
+        sprintf( g_szDtlMsg,
+                "TFB_テレバン契約属性受付テーブルの検索に失敗しました。(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                       sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "SELECT TFB_テレバン契約属性受付", NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+    else if (h_TB_COUNT >= 1){
+        sprintf( g_szDtlMsg,
+               "【翌営業日連絡】承認処理中の顧客です。BANK・R画面より承認または却下をしてください。契約者番号:%s、CIFNO:%s ",
+               h_ContractorID, h_CIFNO);
+        send_err ( m$message1, 0, g_szDtlMsg, NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+    
+    /* TFB_テレバン契約口座受付に事前口座が存在するか確認 */
+    h_TB_COUNT = 0;
+    
+    G_POSITION = __LINE__;
+    EXEC SQL SELECT COUNT(*) INTO :h_TB_COUNT
+    FROM TFB_テレバン契約口座受付
+    WHERE 契約者番号 = :h_ContractorID
+    ;
+    if( sqlca.sqlcode != 0 ) {
+        sprintf( g_szDtlMsg,
+                "TFB_テレバン契約口座受付テーブルの検索に失敗しました。(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                       sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "SELECT TFB_テレバン契約口座受付", NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+    else if (h_TB_COUNT >= 1){
+        sprintf( g_szDtlMsg,
+               "【翌営業日連絡】承認処理中の顧客です。BANK・R画面より承認または却下をしてください。契約者番号:%s、CIFNO:%s ",
+               h_ContractorID, h_CIFNO);
+        send_err ( m$message1, 0, g_szDtlMsg, NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+    
+    /* TFB_テレバン契約振込先受付に振込口座が存在するか確認 */
+    
+    h_TB_COUNT = 0;
+    
+    G_POSITION = __LINE__;
+    EXEC SQL SELECT COUNT(*) INTO :h_TB_COUNT
+    FROM TFB_テレバン契約振込先受付
+    WHERE 契約者番号 = :h_ContractorID
+    ;
+    if( sqlca.sqlcode != 0 ) {
+        sprintf( g_szDtlMsg,
+                "TFB_テレバン契約振込先受付テーブルの検索に失敗しました。(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                       sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "SELECT TFB_テレバン契約振込先受付", NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+    else if (h_TB_COUNT >= 1){
+        sprintf( g_szDtlMsg,
+               "【翌営業日連絡】承認処理中の顧客です。BANK・R画面より承認または却下をしてください。契約者番号:%s、CIFNO:%s ",
+               h_ContractorID, h_CIFNO);
+        send_err ( m$message1, 0, g_szDtlMsg, NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+    
+    return NORMAL;
+}
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*          int countKoteisei( char *g_szDtlMsg )                            */
+/* Made by:                                                                  */
+/* Description : 個別明細固定性預金から契約口座件数を取得する                */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* g_szDtlMsg      char*        I/O  事象詳細文字列                          */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    h_TB_COUNT   : カウント結果                                            */
+/*    COUNTERROR   : カウントエラー                                          */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int countKoteisei( char *g_szDtlMsg )
+{
+        
+    /* TF_個別明細固定性預金から契約口座件数を取得する */
+    h_TB_COUNT = 0;      /* テーブルカウント */
+    
+    memset(sqlcmd_local, 0x00, sizeof(sqlcmd_local));
+    strcpy(sqlcmd_local, "SELECT ");	
+    strcat(sqlcmd_local, "COUNT(*) ");
+    strcat(sqlcmd_local, "FROM TF_個別明細固定性預金 ");
+    strcat(sqlcmd_local, "WHERE ");
+    strcat(sqlcmd_local, "CIFNO = '");
+    strcat(sqlcmd_local, h_CIFNO);
+    strcat(sqlcmd_local, "' ");
+    
+    if( strncmp(h_ZentenFlg, FLG_ON, 1) == 0 ){
+    	strcat(sqlcmd_local, "AND 店番 NOT IN ( ");
+    	strcat(sqlcmd_local, TENBAN_CC_HONNBU);
+    	strcat(sqlcmd_local, " ) ");
+    }else if( strncmp(h_YujintenFlg, FLG_ON, 1) == 0 ){
+    	strcat(sqlcmd_local, "AND 店番 NOT IN ( ");
+    	strcat(sqlcmd_local,     TENBAN_CC_HONNBU);
+    	strcat(sqlcmd_local, " ) ");
+    	strcat(sqlcmd_local, "AND ( ");
+    	strcat(sqlcmd_local,     "店番  = '");
+    	strcat(sqlcmd_local,         h_TBMoushikomiten);
+    	strcat(sqlcmd_local,     "' ");
+    	strcat(sqlcmd_local,     "OR ");
+    	strcat(sqlcmd_local,     "( 店番 IN ( ");
+    	strcat(sqlcmd_local,         BANK_SHITEN);
+    	strcat(sqlcmd_local,         " ) ");
+    	strcat(sqlcmd_local,         "AND 口座開設年月日 >= ");
+    	strcat(sqlcmd_local,             YAKKAN_DATE);
+    	strcat(sqlcmd_local,     " ) ");
+    	strcat(sqlcmd_local, " ) ");
+    } else{
+    	return h_TB_COUNT;
+    }
+        
+    G_POSITION = __LINE__;
+    EXEC SQL PREPARE sqlcommand_count_koteisei FROM :sqlcmd_local;
+    if( sqlca.sqlcode != 0 ){
+        sprintf( g_szDtlMsg,
+                "固定性預金情報の検索(PREPARE)に失敗しました。(sqlca.sqlcode=%d)", sqlca.sqlcode);
+        send_err( m$emb_error, sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err( m$sql_statment, sqlca.sqlcode, "固定性預金情報の取得(PREPARE)に失敗", NULL, NULL, G_STATION );
+        return(COUNT_ERROR);
+    }
+
+    G_POSITION = __LINE__;
+    EXEC SQL DECLARE CUR_COUNT_KOTEISEI CURSOR FOR sqlcommand_count_koteisei;   
+    	
+    if( sqlca.sqlcode < 0 ) {
+        sprintf( g_szDtlMsg,
+                "固定性預金情報の検索(DECLARE)に失敗しました。(sqlca.sqlcode=%d)", sqlca.sqlcode);
+        send_err( m$emb_error, sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err( m$sql_statment, sqlca.sqlcode, "固定性預金情報の取得(DECLARE)に失敗", NULL, NULL, G_STATION );
+        return(COUNT_ERROR);
+    }
+    
+    G_POSITION = __LINE__;
+    EXEC SQL OPEN CUR_COUNT_KOTEISEI;
+    if( sqlca.sqlcode < 0 ) {
+        sprintf( g_szDtlMsg,
+                "カーソル(CUR_COUNT_KOTEISEI)オープン・エラー(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                      sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        return(COUNT_ERROR);
+    }
+    while(1){
+			G_POSITION = __LINE__;
+		EXEC SQL FETCH CUR_COUNT_KOTEISEI INTO :h_TB_COUNT ;
+            if (sqlca.sqlcode == ORA_NOF){
+                break;
+            }
+            else if (sqlca.sqlcode < 0){
+				send_err ( m$sql_statment, sqlca.sqlcode, "カーソル(CUR_MEISAI) FETCHエラー", NULL, NULL, G_STATION);
+                return(COUNT_ERROR);
+            }
+    }
+        
+	G_POSITION = __LINE__;
+    EXEC SQL CLOSE CUR_COUNT_KOTEISEI;
+        
+    return h_TB_COUNT;
+}
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*          int getKoteisei( KOZA_DATA **data, char *g_szDtlMsg )            */
+/* Made by:                                                                  */
+/* Description : 個別明細固定性預金から契約口座情報を取得する                */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* data            KOZA_DATA**  I/O  構造体配列                              */
+/* g_szDtlMsg      char*        I/O  事象詳細文字列                          */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL       : 正常終了                                                */
+/*    ERROR        : 挿入エラー                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int getKoteisei( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
+{
+
+    /* TF_個別明細固定性預金から契約口座情報を取得する */
+    int getCount = 0;
+    memset(sqlcmd_local, 0x00, sizeof(sqlcmd_local));
+    strcpy(sqlcmd_local, "SELECT ");	
+    strcat(sqlcmd_local, "TRIM(店番), ");
+    strcat(sqlcmd_local, "科目ID, ");
+    strcat(sqlcmd_local, "口座番号, ");
+    strcat(sqlcmd_local, "仕組預金, ");
+    strcat(sqlcmd_local, "通証区分ID, ");
+    strcat(sqlcmd_local, "口座開設年月日 ");
+    strcat(sqlcmd_local, "FROM ");
+    strcat(sqlcmd_local, "TF_個別明細固定性預金 ");
+    strcat(sqlcmd_local, "WHERE ");
+    strcat(sqlcmd_local, "CIFNO = ");
+    strcat(sqlcmd_local, "'");
+    strcat(sqlcmd_local, h_CIFNO);    
+    strcat(sqlcmd_local, "' "); 
+    strcat(sqlcmd_local, "AND 店番 NOT IN ( ");
+    strcat(sqlcmd_local, TENBAN_CC_HONNBU);
+    strcat(sqlcmd_local, " ) ");
+    if( strncmp(h_ZentenFlg, FLG_ON, 1) != 0 && strncmp(h_YujintenFlg, FLG_ON, 1) == 0 ){
+    	strcat(sqlcmd_local, "AND ( 店番 = ");
+    	strcat(sqlcmd_local, "'");
+    	strcat(sqlcmd_local, h_TBMoushikomiten);    
+    	strcat(sqlcmd_local, "' "); 
+    	strcat(sqlcmd_local, "OR ( 店番 IN ( ");
+    	strcat(sqlcmd_local, BANK_SHITEN);
+    	strcat(sqlcmd_local, " ) ");
+    	strcat(sqlcmd_local, "AND 口座開設年月日 >= ");
+    	strcat(sqlcmd_local, YAKKAN_DATE);
+    	strcat(sqlcmd_local, " ) ) ");
+    }
+    strcat(sqlcmd_local, "ORDER  BY 口座開設年月日");
+                
+    G_POSITION = __LINE__;
+    EXEC SQL PREPARE sqlcommand_koteisei FROM :sqlcmd_local;
+    if( sqlca.sqlcode != 0 ){
+        sprintf( g_szDtlMsg,
+                "TF_個別明細固定性預金の検索(PREPARE)に失敗しました。(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                       sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err( m$emb_error, sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err( m$sql_statment, sqlca.sqlcode, "個別明細固定性預金の取得(PREPARE)に失敗", NULL, NULL, G_STATION );
+        return(ERROR);
+    }
+
+    G_POSITION = __LINE__;
+    EXEC SQL DECLARE CUR_KOTEISEI CURSOR FOR sqlcommand_koteisei;
+    
+    if( sqlca.sqlcode < 0 ) {
+        sprintf( g_szDtlMsg,
+                "TF_個別明細固定性預金の検索(DECLARE)に失敗しました。(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                       sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err( m$emb_error, sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err( m$sql_statment, sqlca.sqlcode, "個別明細固定性預金の取得(DECLARE)に失敗", NULL, NULL, G_STATION );
+        return(ERROR);
+    }
+                
+    G_POSITION = __LINE__;
+    EXEC SQL OPEN CUR_KOTEISEI;
+    	
+    if( sqlca.sqlcode < 0 ) {
+        sprintf( g_szDtlMsg,
+                "カーソル(CUR_KOTEISEI)オープン・エラー(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                      sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+    
+    i = data_count;
+     while (1)
+    {
+        memset( h_BranchId,                 0x00, sizeof(h_BranchId) );
+        memset( h_AccntType,                0x00, sizeof(h_AccntType) );
+        memset( h_AccntNo,                  0x00, sizeof(h_AccntNo) );
+        memset( h_ShikumiYokin,             0x00, sizeof(h_ShikumiYokin) );
+        memset( h_TsushoKbnId,              0x00, sizeof(h_TsushoKbnId) );
+        memset( h_StartDate,                0x00, sizeof(h_StartDate) );
+        
+		G_POSITION = __LINE__;
+        EXEC SQL FETCH CUR_KOTEISEI INTO 
+        	:h_BranchId      :h_ind_BranchId,
+        	:h_AccntType     :h_ind_AccntType,      
+        	:h_AccntNo       :h_ind_AccntNo,        
+        	:h_ShikumiYokin  :h_ind_ShikumiYokin,        
+        	:h_TsushoKbnId   :h_ind_TsushoKbnId,        
+        	:h_StartDate     :h_ind_StartDate      
+        	;
+        
+            if (sqlca.sqlcode == ORA_NOF){
+                break;
+            }
+            else if (sqlca.sqlcode < 0){
+				send_err ( m$sql_statment, sqlca.sqlcode, "カーソル(CUR_MEISAI) FETCHエラー", NULL, NULL, G_STATION);
+                return(ERROR);
+            }
+                
+        strcpy(data[i]->branch_id, h_BranchId);
+        strcpy(data[i]->accnt_type, h_AccntType);
+        strcpy(data[i]->accnt_no, h_AccntNo);
+        strcpy(data[i]->shikumi_yokin, h_ShikumiYokin);
+        strcpy(data[i]->tsusho_kbn_id, h_TsushoKbnId);
+        strcpy(data[i]->tsuka_ryakusyo, "");
+        strcpy(data[i]->start_date, h_StartDate);
+        strcpy(data[i]->flg_toshin, "0");
+        if( strcmp( data[i]->branch_id, h_TBMoushikomiten ) == 0){
+        	strcpy(data[i]->flg_mousikomiten, FLG_ON);
+        }
+        else{
+        	strcpy(data[i]->flg_mousikomiten, "");
+        }
+        strcpy(data[i]->flg_not_ins, "");
+        data[i]->sort_kamoku = 1;
+		i++;
+		getCount++;
+    }
+    
+	G_POSITION = __LINE__;
+    EXEC SQL CLOSE CUR_KOTEISEI;
+    
+    return NOMAL;
+}
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*          int countRyudosei( char *g_szDtlMsg )                            */
+/* Made by:                                                                  */
+/* Description : 個別明細流動性預金から契約口座件数を取得する                */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* g_szDtlMsg      char*        I/O  事象詳細文字列                          */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    h_TB_COUNT   : カウント結果                                            */
+/*    COUNTERROR   : カウントエラー                                          */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int countRyudosei( char *g_szDtlMsg )
+{
+
+    /* TF_個別明細流動性預金から契約口座情報を取得する */
+    h_TB_COUNT = 0;      /* テーブルカウント */
+    
+    memset(sqlcmd_local, 0x00, sizeof(sqlcmd_local));
+    strcpy(sqlcmd_local, "SELECT ");	
+    strcat(sqlcmd_local, "COUNT(*) ");
+    strcat(sqlcmd_local, "FROM TF_個別明細流動性預金 ");
+    strcat(sqlcmd_local, "WHERE ");
+    strcat(sqlcmd_local, "CIFNO = '");
+    strcat(sqlcmd_local, h_CIFNO);
+    strcat(sqlcmd_local, "' ");
+    
+    if( strncmp(h_ZentenFlg, FLG_ON, 1) == 0 ){
+    	strcat(sqlcmd_local, "AND 店番 NOT IN ( ");
+    	strcat(sqlcmd_local, TENBAN_CC_HONNBU);
+    	strcat(sqlcmd_local, " ) ");
+    }else if( strncmp(h_YujintenFlg, FLG_ON, 1) == 0 ){
+    	strcat(sqlcmd_local, "AND 店番 NOT IN ( ");
+    	strcat(sqlcmd_local,     TENBAN_CC_HONNBU);
+    	strcat(sqlcmd_local, " ) ");
+    	strcat(sqlcmd_local, "AND ( ");
+    	strcat(sqlcmd_local,     "店番  = '");
+    	strcat(sqlcmd_local,         h_TBMoushikomiten);
+    	strcat(sqlcmd_local,     "' ");
+    	strcat(sqlcmd_local,     "OR ");
+    	strcat(sqlcmd_local,     "( 店番 IN ( ");
+    	strcat(sqlcmd_local,         BANK_SHITEN);
+    	strcat(sqlcmd_local,         ") ");
+    	strcat(sqlcmd_local,         "AND 口座開設年月日 >= ");
+    	strcat(sqlcmd_local,             YAKKAN_DATE);
+    	strcat(sqlcmd_local,     " ) ");
+    	strcat(sqlcmd_local, " ) ");
+    } else{
+    	return h_TB_COUNT;
+    }
+    
+    G_POSITION = __LINE__;
+    EXEC SQL PREPARE sqlcommand_count_ryudousei FROM :sqlcmd_local;
+    if( sqlca.sqlcode != 0 ){
+        sprintf( g_szDtlMsg,
+                "流動性預金情報の検索(PREPARE)に失敗しました。(sqlca.sqlcode=%d)", sqlca.sqlcode);
+        send_err( m$emb_error, sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err( m$sql_statment, sqlca.sqlcode, "流動性預金情報の取得(PREPARE)に失敗", NULL, NULL, G_STATION );
+        return(COUNT_ERROR);
+    }
+                
+    G_POSITION = __LINE__;
+    EXEC SQL DECLARE CUR_COUNT_RYUDOSEI CURSOR FOR sqlcommand_count_ryudousei;   
+    	
+    if( sqlca.sqlcode < 0 ) {
+        sprintf( g_szDtlMsg,
+                "流動性預金情報の検索(DECLARE)に失敗しました。(sqlca.sqlcode=%d)", sqlca.sqlcode);
+        send_err( m$emb_error, sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err( m$sql_statment, sqlca.sqlcode, "流動性預金情報の取得(DECLARE)に失敗", NULL, NULL, G_STATION );
+        return(COUNT_ERROR);
+    }
+                
+    G_POSITION = __LINE__;
+    EXEC SQL OPEN CUR_COUNT_RYUDOSEI;
+    if( sqlca.sqlcode < 0 ) {
+        sprintf( g_szDtlMsg,
+                "カーソル(CUR_COUNT_RYUDOSEI)オープン・エラー(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                      sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        return(COUNT_ERROR);
+    }
+                
+     while (1)
+    {
+        G_POSITION = __LINE__;
+        EXEC SQL FETCH CUR_COUNT_RYUDOSEI INTO :h_TB_COUNT ;
+            if (sqlca.sqlcode == ORA_NOF){
+                break;
+            }
+            else if (sqlca.sqlcode < 0){
+				send_err ( m$sql_statment, sqlca.sqlcode, "カーソル(CUR_COUNT_RYUDOSEI) FETCHエラー", NULL, NULL, G_STATION);
+                return(COUNT_ERROR);
+            }
+    }
+    
+    G_POSITION = __LINE__;
+    EXEC SQL CLOSE CUR_COUNT_RYUDOSEI;
+    
+    return h_TB_COUNT;
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*          int getRyudosei( KOZA_DATA **data, int data_count                */
+/*                            , int get_data_count, char *g_szDtlMsg )       */
+/* Made by:                                                                  */
+/* Description : 個別明細流動性預金から契約口座情報を取得する                */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* data            KOZA_DATA*   I/O  構造体ポインタ                          */
+/* g_szDtlMsg      char*        I/O  事象詳細文字列                          */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL       : 正常終了                                                */
+/*    ERROR        : 挿入エラー                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int getRyudosei( KOZA_DATA **data, int data_count, int get_data_count, char *g_szDtlMsg )
+{
+
+    /* TF_個別明細流動性預金から契約口座情報を取得する */
+    int getCount = 0;
+    
+    memset(sqlcmd_local, 0x00, sizeof(sqlcmd_local));
+    strcpy(sqlcmd_local, "SELECT ");	
+    strcat(sqlcmd_local, "TRIM(店番), ");
+    strcat(sqlcmd_local, "科目ID, ");
+    strcat(sqlcmd_local, "口座番号, ");
+    strcat(sqlcmd_local, "通証区分ID, ");
+    strcat(sqlcmd_local, "口座開設年月日 ");
+    strcat(sqlcmd_local, "FROM ");
+    strcat(sqlcmd_local, "TF_個別明細流動性預金 ");
+    strcat(sqlcmd_local, "WHERE ");
+    strcat(sqlcmd_local, "CIFNO = ");
+    strcat(sqlcmd_local, "'");
+    strcat(sqlcmd_local, h_CIFNO);    
+    strcat(sqlcmd_local, "' "); 
+    strcat(sqlcmd_local, "AND 店番 NOT IN ( ");
+    strcat(sqlcmd_local, TENBAN_CC_HONNBU);
+    strcat(sqlcmd_local, " ) ");
+    if( strncmp(h_ZentenFlg, FLG_ON, 1) != 0 && strncmp(h_YujintenFlg, FLG_ON, 1) == 0 ){
+    	strcat(sqlcmd_local, "AND ( 店番 = ");
+    	strcat(sqlcmd_local, "'");
+    	strcat(sqlcmd_local, h_TBMoushikomiten);    
+    	strcat(sqlcmd_local, "' "); 
+    	strcat(sqlcmd_local, "OR ( 店番 IN ( ");
+    	strcat(sqlcmd_local,     BANK_SHITEN);
+    	strcat(sqlcmd_local,     " ) ");
+    	strcat(sqlcmd_local,     "AND 口座開設年月日 >= ");
+    	strcat(sqlcmd_local,         YAKKAN_DATE);
+    	strcat(sqlcmd_local, " ) ) ");
+    }
+    strcat(sqlcmd_local, "ORDER  BY 口座開設年月日");
+    
+    G_POSITION = __LINE__;
+    EXEC SQL PREPARE sqlcommand_ryudousei FROM :sqlcmd_local;
+    if( sqlca.sqlcode != 0 ){
+        sprintf( g_szDtlMsg,
+                "TF_個別明細流動性預金の検索(PREPARE)に失敗しました。(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                       sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err( m$emb_error, sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err( m$sql_statment, sqlca.sqlcode, "個別明細流動性預金の取得(PREPARE)に失敗", NULL, NULL, G_STATION );
+        return(ERROR);
+    }
+
+    G_POSITION = __LINE__;
+    EXEC SQL DECLARE CUR_RYUDOSEI CURSOR FOR sqlcommand_ryudousei; 
+    	
+    if( sqlca.sqlcode < 0 ) {
+        sprintf( g_szDtlMsg,
+                "TF_個別明細流動性預金の検索(DECLARE)に失敗しました。(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                       sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err( m$emb_error, sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err( m$sql_statment, sqlca.sqlcode, "個別明細流動性預金の取得(DECLARE)に失敗", NULL, NULL, G_STATION );
+        return(ERROR);
+    }
+
+    G_POSITION = __LINE__;
+    EXEC SQL OPEN CUR_RYUDOSEI;
+    if( sqlca.sqlcode < 0 ) {
+        sprintf( g_szDtlMsg,
+                "カーソル(CUR_RYUDOSEI)オープン・エラー(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                      sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+
+    i = data_count;
+    
+     while (1)
+    {
+        memset( h_BranchId,                 0x00, sizeof(h_BranchId) );
+        memset( h_AccntType,                0x00, sizeof(h_AccntType) );
+        memset( h_AccntNo,                  0x00, sizeof(h_AccntNo) );
+        memset( h_TsushoKbnId,              0x00, sizeof(h_TsushoKbnId) );
+        memset( h_StartDate,                0x00, sizeof(h_StartDate) );
+        
+        G_POSITION = __LINE__;
+        EXEC SQL FETCH CUR_RYUDOSEI INTO 
+        	:h_BranchId      :h_ind_BranchId,
+        	:h_AccntType     :h_ind_AccntType,      
+        	:h_AccntNo       :h_ind_AccntNo,          
+        	:h_TsushoKbnId   :h_ind_TsushoKbnId,       
+        	:h_StartDate     :h_ind_StartDate     
+        	;
+        	
+        if (sqlca.sqlcode == ORA_NOF){
+            break;
+        }
+        else if (sqlca.sqlcode < 0){
+		    send_err ( m$sql_statment, sqlca.sqlcode, "カーソル(CUR_RYUDOSEI) FETCHエラー", NULL, NULL, G_STATION);
+            return(ERROR);
+        }
+        
+        strcpy(data[i]->branch_id, h_BranchId);
+        strcpy(data[i]->accnt_type, h_AccntType);
+        strcpy(data[i]->accnt_no, h_AccntNo);
+        strcpy(data[i]->shikumi_yokin, "");
+        strcpy(data[i]->tsusho_kbn_id, h_TsushoKbnId);
+        strcpy(data[i]->tsuka_ryakusyo, "");
+        strcpy(data[i]->start_date, h_StartDate);
+        strcpy(data[i]->flg_toshin, "0");
+        if( strcmp( data[i]->branch_id, h_TBMoushikomiten ) == 0){
+        	strcpy(data[i]->flg_mousikomiten, FLG_ON);
+        }
+        else
+        {
+        	strcpy(data[i]->flg_mousikomiten, "");
+        }
+        strcpy(data[i]->flg_not_ins, "");
+        data[i]->sort_kamoku = 1;
+		i++;
+		getCount++;
+    }
+    
+    G_POSITION = __LINE__;
+    EXEC SQL CLOSE CUR_RYUDOSEI;
+    
+    return NOMAL;
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*          int countGaika( char *g_szDtlMsg )                               */
+/* Made by:                                                                  */
+/* Description : 個別明細外貨預金から契約口座件数を取得する                  */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* g_szDtlMsg      char*        I/O  事象詳細文字列                          */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    h_TB_COUNT   : カウント結果                                            */
+/*    COUNTERROR   : カウントエラー                                          */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int countGaika( char *g_szDtlMsg )
+{
+
+    /* TF_個別明細外貨預金から契約口座情報を取得する */
+    h_TB_COUNT = 0;      /* テーブルカウント */
+    
+    memset(sqlcmd_local, 0x00, sizeof(sqlcmd_local));
+    strcpy(sqlcmd_local, "SELECT ");	
+    strcat(sqlcmd_local, "COUNT(*) ");
+    strcat(sqlcmd_local, "FROM TF_個別明細外貨預金 ");
+    strcat(sqlcmd_local, "WHERE ");
+    strcat(sqlcmd_local, "CIFNO = '");
+    strcat(sqlcmd_local, h_CIFNO);
+    strcat(sqlcmd_local, "' ");
+    
+    if( strncmp(h_ZentenFlg, FLG_ON, 1) == 0 ){
+    	strcat(sqlcmd_local, "AND 店番 NOT IN ( ");
+    	strcat(sqlcmd_local, TENBAN_CC_HONNBU);
+    	strcat(sqlcmd_local, " ) ");
+    	strcat(sqlcmd_local, "AND 登録年月日 >= ");
+    	strcat(sqlcmd_local, REGIST_DATE);
+    	strcat(sqlcmd_local, " ");
+    }else if( strncmp(h_YujintenFlg, FLG_ON, 1) == 0 ){
+    	strcat(sqlcmd_local, "AND 店番 NOT IN ( ");
+    	strcat(sqlcmd_local,     TENBAN_CC_HONNBU);
+    	strcat(sqlcmd_local, " ) ");
+    	strcat(sqlcmd_local, "AND 登録年月日 >= ");
+    	strcat(sqlcmd_local, REGIST_DATE);
+    	strcat(sqlcmd_local, " ");
+    	strcat(sqlcmd_local, "AND 店番 = '");
+    	strcat(sqlcmd_local, h_TBMoushikomiten);
+    	strcat(sqlcmd_local, "' ");
+    } else{
+    	return h_TB_COUNT;
+    }
+    
+    G_POSITION = __LINE__;
+    EXEC SQL PREPARE sqlcommand_count_gaika FROM :sqlcmd_local;
+    if( sqlca.sqlcode != 0 ){
+        sprintf( g_szDtlMsg,
+                "外貨預金情報の検索(PREPARE)に失敗しました。(sqlca.sqlcode=%d)", sqlca.sqlcode);
+        send_err( m$emb_error, sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err( m$sql_statment, sqlca.sqlcode, "外貨預金情報の取得(PREPARE)に失敗", NULL, NULL, G_STATION );
+        return(COUNT_ERROR);
+    }
+
+    G_POSITION = __LINE__;
+    EXEC SQL DECLARE CUR_COUNT_GAIKA CURSOR FOR sqlcommand_count_gaika;   
+    	
+    if( sqlca.sqlcode < 0 ) {
+        sprintf( g_szDtlMsg,
+                "外貨預金情報の検索(DECLARE)に失敗しました。(sqlca.sqlcode=%d)", sqlca.sqlcode);
+        send_err( m$emb_error, sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err( m$sql_statment, sqlca.sqlcode, "外貨預金情報の取得(DECLARE)に失敗", NULL, NULL, G_STATION );
+        return(COUNT_ERROR);
+    }
+    
+    G_POSITION = __LINE__;
+    EXEC SQL OPEN CUR_COUNT_GAIKA;
+    if( sqlca.sqlcode < 0 ) {
+        sprintf( g_szDtlMsg,
+                "カーソル(CUR_COUNT_GAIKA)オープン・エラー(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                      sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        return(COUNT_ERROR);
+    }
+    
+     while (1)
+    {
+        G_POSITION = __LINE__;
+        EXEC SQL FETCH CUR_COUNT_GAIKA INTO :h_TB_COUNT ;
+        
+        if (sqlca.sqlcode == ORA_NOF){
+            break;
+        }
+        else if (sqlca.sqlcode < 0){
+		    send_err ( m$sql_statment, sqlca.sqlcode, "カーソル(CUR_COUNT_GAIKA) FETCHエラー", NULL, NULL, G_STATION);
+            return(COUNT_ERROR);
+        }
+    }
+    
+    G_POSITION = __LINE__;
+    EXEC SQL CLOSE CUR_COUNT_GAIKA;
+    
+    return h_TB_COUNT;
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*          int getGaika( KOZA_DATA **data, int data_count                   */
+/*                        , int get_data_count, char *g_szDtlMsg )           */
+/* Made by:                                                                  */
+/* Description : 個別明細外貨預金から契約口座情報を取得する                  */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* data            KOZA_DATA*   I/O  構造体ポインタ                          */
+/* g_szDtlMsg      char*        I/O  事象詳細文字列                          */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL       : 正常終了                                                */
+/*    ERROR        : 挿入エラー                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int getGaika( KOZA_DATA **data, int data_count, int get_data_count, char *g_szDtlMsg )
+{
+
+    /* TF_個別明細外貨預金から契約口座情報を取得する */
+    int getCount = 0;
+    
+    memset(sqlcmd_local, 0x00, sizeof(sqlcmd_local));
+    strcpy(sqlcmd_local, "SELECT ");	
+    strcat(sqlcmd_local, "TRIM(TF_個別明細外貨預金.店番), ");
+    strcat(sqlcmd_local, "TF_個別明細外貨預金.科目ID, ");
+    strcat(sqlcmd_local, "TF_個別明細外貨預金.口座番号, ");
+    strcat(sqlcmd_local, "TF_個別明細外貨預金.登録年月日, ");
+    strcat(sqlcmd_local, "TM_通貨.通貨略称 ");
+    strcat(sqlcmd_local, "FROM ");
+    strcat(sqlcmd_local, "TF_個別明細外貨預金 ");
+    strcat(sqlcmd_local, "LEFT JOIN ");
+    strcat(sqlcmd_local, "TM_通貨 ");
+    strcat(sqlcmd_local, "ON ");
+    strcat(sqlcmd_local, "TF_個別明細外貨預金.通貨ID = TM_通貨.通貨ID ");
+    strcat(sqlcmd_local, "WHERE ");
+    strcat(sqlcmd_local, "CIFNO = ");
+    strcat(sqlcmd_local, "'");
+    strcat(sqlcmd_local, h_CIFNO);    
+    strcat(sqlcmd_local, "' "); 
+    strcat(sqlcmd_local, "AND 店番 NOT IN ( ");
+    strcat(sqlcmd_local, TENBAN_CC_HONNBU);
+    strcat(sqlcmd_local, " ) ");
+    strcat(sqlcmd_local, "AND 登録年月日 >= ");
+    strcat(sqlcmd_local, REGIST_DATE);
+    strcat(sqlcmd_local, " ");
+    if( strncmp(h_ZentenFlg, FLG_ON, 1) != 0 && strncmp(h_YujintenFlg, FLG_ON, 1) == 0 ){
+    	strcat(sqlcmd_local, "AND 店番 = ");
+    	strcat(sqlcmd_local, "'");
+    	strcat(sqlcmd_local, h_TBMoushikomiten);    
+    	strcat(sqlcmd_local, "' "); 
+    }
+    strcat(sqlcmd_local, "ORDER  BY 登録年月日");
+    
+    G_POSITION = __LINE__;
+    EXEC SQL PREPARE sqlcommand_gaika FROM :sqlcmd_local;
+    if( sqlca.sqlcode != 0 ){
+        sprintf( g_szDtlMsg,
+                "TF_個別明細外貨預金の検索(PREPARE)に失敗しました。(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                       sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err( m$emb_error, sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err( m$sql_statment, sqlca.sqlcode, "個別明細外貨預金の取得(PREPARE)に失敗", NULL, NULL, G_STATION );
+        return(ERROR);
+    }
+
+    G_POSITION = __LINE__;
+    EXEC SQL DECLARE CUR_GAIKA CURSOR FOR sqlcommand_gaika; 
+    	
+    if( sqlca.sqlcode < 0 ) {
+        sprintf( g_szDtlMsg,
+                "TF_個別明細外貨預金の検索(DECLARE)に失敗しました。(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                       sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err( m$emb_error, sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err( m$sql_statment, sqlca.sqlcode, "個別明細外貨預金の取得(DECLARE)に失敗", NULL, NULL, G_STATION );
+        return(ERROR);
+    }
+
+    G_POSITION = __LINE__;
+    EXEC SQL OPEN CUR_GAIKA;
+    if( sqlca.sqlcode < 0 ) {
+        sprintf( g_szDtlMsg,
+                "カーソル(CUR_GAIKA)オープン・エラー(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                      sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+
+    i = data_count;
+    
+     while (1)
+    {
+        memset( h_BranchId,                 0x00, sizeof(h_BranchId) );
+        memset( h_AccntType,                0x00, sizeof(h_AccntType) );
+        memset( h_AccntNo,                  0x00, sizeof(h_AccntNo) );
+        memset( h_StartDate,                0x00, sizeof(h_StartDate) );
+        memset( h_TsukaRyakusyo,            0x00, sizeof(h_TsukaRyakusyo) );
+        
+        G_POSITION = __LINE__;
+        EXEC SQL FETCH CUR_GAIKA INTO 
+        	:h_BranchId        :h_ind_BranchId,
+        	:h_AccntType       :h_ind_AccntType,      
+        	:h_AccntNo         :h_ind_AccntNo,        
+        	:h_StartDate       :h_ind_StartDate,      
+        	:h_TsukaRyakusyo   :h_ind_TsukaRyakusyo  
+        	;
+        	
+        if (sqlca.sqlcode == ORA_NOF){
+            break;
+        }
+        else if (sqlca.sqlcode < 0){
+			send_err ( m$sql_statment, sqlca.sqlcode, "カーソル(CUR_GAIKA) FETCHエラー", NULL, NULL, G_STATION);
+            return(ERROR);
+        }
+        
+        strcpy(data[i]->branch_id, h_BranchId);
+        strcpy(data[i]->accnt_type, h_AccntType);
+        strcpy(data[i]->accnt_no, h_AccntNo);
+        strcpy(data[i]->shikumi_yokin, "");
+        strcpy(data[i]->tsusho_kbn_id, "");
+        strcpy(data[i]->tsuka_ryakusyo, h_TsukaRyakusyo);
+        strcpy(data[i]->start_date, h_StartDate);
+        strcpy(data[i]->flg_toshin, "0");
+        if( strcmp( data[i]->branch_id, h_TBMoushikomiten ) == 0){
+        	strcpy(data[i]->flg_mousikomiten, FLG_ON);
+        }
+        else
+        {
+        	strcpy(data[i]->flg_mousikomiten, "");
+        }
+        strcpy(data[i]->flg_not_ins, "");
+        data[i]->sort_kamoku = 1;
+		i++;
+		getCount++;
+    }
+    
+    G_POSITION = __LINE__;
+    EXEC SQL CLOSE CUR_GAIKA;
+    
+    return NOMAL;
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*          int countToshin( char *g_szDtlMsg )                              */
+/* Made by:                                                                  */
+/* Description : 個別明細投信口座から契約口座件数を取得する                  */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* g_szDtlMsg      char*        I/O  事象詳細文字列                          */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    h_TB_COUNT   : カウント結果                                            */
+/*    COUNTERROR   : カウントエラー                                          */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int countToshin( char *g_szDtlMsg )
+{
+
+    /* TF_個別明細投信口座から契約口座件数を取得する */
+    h_TB_COUNT = 0;      /* テーブルカウント */
+    
+    memset(sqlcmd_local, 0x00, sizeof(sqlcmd_local));
+    strcpy(sqlcmd_local, "SELECT ");	
+    strcat(sqlcmd_local, "COUNT(*) ");
+    strcat(sqlcmd_local, "FROM TF_個別明細投信口座 ");
+    strcat(sqlcmd_local, "WHERE ");
+    strcat(sqlcmd_local, "CIFNO = '");
+    strcat(sqlcmd_local, h_CIFNO);
+    strcat(sqlcmd_local, "' ");
+    
+    if( strncmp(h_ZentenFlg, FLG_ON, 1) == 0 ){
+    	strcat(sqlcmd_local, "AND 店番 NOT IN ( ");
+    	strcat(sqlcmd_local, TENBAN_CC_HONNBU);
+    	strcat(sqlcmd_local, " ) ");
+    	strcat(sqlcmd_local, "AND 振込銀行ID = ");
+    	strcat(sqlcmd_local, BANK_ID_JIGYOU);
+    	strcat(sqlcmd_local, " ");
+    	strcat(sqlcmd_local, "AND 科目ID = '");
+    	strcat(sqlcmd_local, KAMOKU_FUTSU_TOSHIN);
+    	strcat(sqlcmd_local, "' ");
+    }else if( strncmp(h_YujintenFlg, FLG_ON, 1) == 0 ){
+    	strcat(sqlcmd_local, "AND 店番 NOT IN ( ");
+    	strcat(sqlcmd_local,     TENBAN_CC_HONNBU);
+    	strcat(sqlcmd_local, " ) ");
+    	strcat(sqlcmd_local, "AND 振込銀行ID = ");
+    	strcat(sqlcmd_local, BANK_ID_JIGYOU);
+    	strcat(sqlcmd_local, " ");
+    	strcat(sqlcmd_local, "AND ( ");
+    	strcat(sqlcmd_local,     "店番  = '");
+    	strcat(sqlcmd_local,         h_TBMoushikomiten);
+    	strcat(sqlcmd_local,     "' ");
+    	strcat(sqlcmd_local,     "OR ");
+    	strcat(sqlcmd_local,     "( 店番 IN ( ");
+    	strcat(sqlcmd_local,         BANK_SHITEN);
+    	strcat(sqlcmd_local,         ") ");
+    	strcat(sqlcmd_local,         "AND 口座開設年月日 >= ");
+    	strcat(sqlcmd_local,             YAKKAN_DATE);
+    	strcat(sqlcmd_local,     " ) ");
+    	strcat(sqlcmd_local, " ) ");
+    	strcat(sqlcmd_local, "AND 科目ID = '");
+    	strcat(sqlcmd_local, KAMOKU_FUTSU_TOSHIN);
+    	strcat(sqlcmd_local, "' ");
+    } else{
+    	return h_TB_COUNT;
+    }
+    
+    G_POSITION = __LINE__;
+    EXEC SQL PREPARE sqlcommand_count_toshin FROM :sqlcmd_local;
+    if( sqlca.sqlcode != 0 ){
+        sprintf( g_szDtlMsg,
+                "投信預金情報の検索(PREPARE)に失敗しました。(sqlca.sqlcode=%d)", sqlca.sqlcode);
+        send_err( m$emb_error, sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err( m$sql_statment, sqlca.sqlcode, "投信預金情報の取得(PREPARE)に失敗", NULL, NULL, G_STATION );
+        return(COUNT_ERROR);
+    }
+
+    G_POSITION = __LINE__;
+    EXEC SQL DECLARE CUR_COUNT_TOUSHIN CURSOR FOR sqlcommand_count_toshin;   
+    	
+    if( sqlca.sqlcode < 0 ) {
+        sprintf( g_szDtlMsg,
+                "投信預金情報の検索(DECLARE)に失敗しました。(sqlca.sqlcode=%d)", sqlca.sqlcode);
+        send_err( m$emb_error, sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err( m$sql_statment, sqlca.sqlcode, "投信預金情報の取得(DECLARE)に失敗", NULL, NULL, G_STATION );
+        return(COUNT_ERROR);
+    }
+    
+    G_POSITION = __LINE__;
+    EXEC SQL OPEN CUR_COUNT_TOUSHIN;
+    if( sqlca.sqlcode < 0 ) {
+        sprintf( g_szDtlMsg,
+                "カーソル(CUR_COUNT_TOUSHIN)オープン・エラー(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                      sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        return(COUNT_ERROR);
+    }
+    
+     while (1)
+    {
+        G_POSITION = __LINE__;
+        EXEC SQL FETCH CUR_COUNT_TOUSHIN INTO :h_TB_COUNT ;
+        if (sqlca.sqlcode == ORA_NOF){
+            break;
+        }
+        else if (sqlca.sqlcode < 0){
+		    send_err ( m$sql_statment, sqlca.sqlcode, "カーソル(CUR_COUNT_TOUSHIN) FETCHエラー", NULL, NULL, G_STATION);
+            return(COUNT_ERROR);
+        }
+    }
+    
+    G_POSITION = __LINE__;
+    EXEC SQL CLOSE CUR_COUNT_TOUSHIN;
+    
+    return h_TB_COUNT;
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*          int getToshin( KOZA_DATA **data, int data_count                  */
+/*                            , int get_data_count, char *g_szDtlMsg )       */
+/* Made by:                                                                  */
+/* Description : 個別明細投信から契約口座情報を取得する                      */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* data            KOZA_DATA*   I/O  構造体ポインタ                          */
+/* g_szDtlMsg      char*        I/O  事象詳細文字列                          */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL       : 正常終了                                                */
+/*    ERROR        : 挿入エラー                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int getToshin( KOZA_DATA **data, int data_count, int get_data_count, char *g_szDtlMsg )
+{
+
+    /* TF_個別明細投信口座から契約口座情報を取得する */
+    int getCount = 0;
+    
+    memset(sqlcmd_local, 0x00, sizeof(sqlcmd_local));
+    strcpy(sqlcmd_local, "SELECT ");	
+    strcat(sqlcmd_local, "TRIM(店番), ");
+    strcat(sqlcmd_local, "科目ID, ");
+    strcat(sqlcmd_local, "口座番号 ");
+    strcat(sqlcmd_local, "FROM ");
+    strcat(sqlcmd_local, "TF_個別明細投信口座 ");
+    strcat(sqlcmd_local, "WHERE ");
+    strcat(sqlcmd_local, "CIFNO = ");
+    strcat(sqlcmd_local, "'");
+    strcat(sqlcmd_local, h_CIFNO);    
+    strcat(sqlcmd_local, "' "); 
+    strcat(sqlcmd_local, "AND 店番 NOT IN ( ");
+    strcat(sqlcmd_local, TENBAN_CC_HONNBU);
+    strcat(sqlcmd_local, " ) ");
+    strcat(sqlcmd_local, "AND 振込銀行ID = ");
+    strcat(sqlcmd_local, BANK_ID_JIGYOU);
+    strcat(sqlcmd_local, " ");
+    if( strncmp(h_ZentenFlg, FLG_ON, 1) != 0 && strncmp(h_YujintenFlg, FLG_ON, 1) == 0 ){
+    	strcat(sqlcmd_local, "AND ( 店番 = ");
+    	strcat(sqlcmd_local, "'");
+    	strcat(sqlcmd_local, h_TBMoushikomiten);    
+    	strcat(sqlcmd_local, "' "); 
+    	strcat(sqlcmd_local, "OR ( 店番 IN ( ");
+    	strcat(sqlcmd_local, BANK_SHITEN);
+    	strcat(sqlcmd_local, " ) ");
+    	strcat(sqlcmd_local, "AND 口座開設年月日 >= ");
+    	strcat(sqlcmd_local, YAKKAN_DATE);
+    	strcat(sqlcmd_local, " ) ) ");
+    }
+    strcat(sqlcmd_local, "AND 科目ID = '");
+    strcat(sqlcmd_local, KAMOKU_FUTSU_TOSHIN);
+    strcat(sqlcmd_local, "' ORDER  BY 口座開設年月日");
+    
+    G_POSITION = __LINE__;
+    EXEC SQL PREPARE sqlcommand_toshin FROM :sqlcmd_local;
+    if( sqlca.sqlcode != 0 ){
+        sprintf( g_szDtlMsg,
+                "TF_個別明細投信口座の検索(PREPARE)に失敗しました。(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                       sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err( m$emb_error, sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err( m$sql_statment, sqlca.sqlcode, "個別明細投信口座の取得(PREPARE)に失敗", NULL, NULL, G_STATION );
+        return(ERROR);
+    }
+
+    G_POSITION = __LINE__;
+    EXEC SQL DECLARE CUR_TOUSHIN CURSOR FOR sqlcommand_toshin;  
+    	
+    if( sqlca.sqlcode < 0 ) {
+        sprintf( g_szDtlMsg,
+                "TF_個別明細投信口座の検索(DECLARE)に失敗しました。(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                       sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err( m$emb_error, sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err( m$sql_statment, sqlca.sqlcode, "個別明細投信口座の取得(DECLARE)に失敗", NULL, NULL, G_STATION );
+        return(ERROR);
+    }
+
+    G_POSITION = __LINE__;
+    EXEC SQL OPEN CUR_TOUSHIN;
+    if( sqlca.sqlcode < 0 ) {
+        sprintf( g_szDtlMsg,
+                "カーソル(CUR_TOUSHIN)オープン・エラー(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                      sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err ( m$emb_error,sqlca.sqlcode, g_szDtlMsg, NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+
+    i = data_count;
+    
+     while (1)
+    {
+        memset( h_BranchId,                 0x00, sizeof(h_BranchId) );
+        memset( h_AccntType,                0x00, sizeof(h_AccntType) );
+        memset( h_AccntNo,                  0x00, sizeof(h_AccntNo) );
+        
+        G_POSITION = __LINE__;
+        EXEC SQL FETCH CUR_TOUSHIN INTO 
+        	:h_BranchId      :h_ind_BranchId,
+        	:h_AccntType     :h_ind_AccntType,      
+        	:h_AccntNo       :h_ind_AccntNo       
+        	;
+        	
+        if (sqlca.sqlcode == ORA_NOF){
+            break;
+        }
+        else if (sqlca.sqlcode < 0){
+		    send_err ( m$sql_statment, sqlca.sqlcode, "カーソル(CUR_TOUSHIN) FETCHエラー", NULL, NULL, G_STATION);
+            return(ERROR);
+        }
+        
+        strcpy(data[i]->branch_id, h_BranchId);
+        strcpy(data[i]->accnt_type, "9000");
+        strcpy(data[i]->accnt_no, h_AccntNo);
+        strcpy(data[i]->shikumi_yokin, "");
+        strcpy(data[i]->tsusho_kbn_id, "");
+        strcpy(data[i]->tsuka_ryakusyo, "");
+        strcpy(data[i]->start_date, "");
+        strcpy(data[i]->flg_toshin, "1");
+        if( strcmp( data[i]->branch_id, h_TBMoushikomiten ) == 0){
+        	strcpy(data[i]->flg_mousikomiten, FLG_ON);
+        }
+        else {
+        	strcpy(data[i]->flg_mousikomiten, "");
+        }
+        strcpy(data[i]->flg_not_ins, "");
+        data[i]->sort_kamoku = 1;
+        
+		i++;
+		getCount++;
+    }
+    
+    G_POSITION = __LINE__;
+    EXEC SQL CLOSE CUR_TOUSHIN;
+    
+    return NOMAL;
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*          void chgAccntType( KOZA_DATA **data )                            */
+/* Made by:                                                                  */
+/* Description : 科目IDを変換する                                            */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* data            KOZA_DATA*   I/O  構造体ポインタ                          */
+/* g_szDtlMsg      char*        I/O  事象詳細文字列                          */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL       : 正常終了                                                */
+/*    ERROR        : 挿入エラー                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static void chgAccntType( KOZA_DATA **data, int count_all )
+{
+	int len = 0;
+
+    /* 
+     * 科目IDの変換処理
+     * 併せてソート順を設定
+     */
+    for(i = 0; i < count_all; i++){
+        
+        if(data[i]->accnt_type != NULL || strcmp( data[i]->accnt_type, "" ) != 0 ){
+			len =Trim( data[i]->accnt_type );
+        }
+        if(data[i]->tsusho_kbn_id != NULL || strcmp( data[i]->tsusho_kbn_id, "" ) != 0 ){
+			len =Trim( data[i]->tsusho_kbn_id );
+        }
+        
+       if( strcmp( data[i]->accnt_type, "9000" ) == 0 ){
+        data[i]->sort_kamoku = 6;
+       }
+       else if( strcmp( data[i]->accnt_type, "1221" ) == 0 ){
+       	strcpy(data[i]->accnt_type, "2050");
+        data[i]->sort_kamoku = 1;
+       }
+       else if( strcmp( data[i]->accnt_type, "2011" ) == 0 
+       	&& strcmp( data[i]->shikumi_yokin, "0" ) == 0 
+       	&& strcmp( data[i]->tsusho_kbn_id, "1" ) == 0 ){
+       	strcpy(data[i]->accnt_type, "2030");
+        data[i]->sort_kamoku = 2;
+       }
+       else if( strcmp( data[i]->accnt_type, "2012" ) == 0 
+       	&& strcmp( data[i]->tsusho_kbn_id, "1" ) == 0 ){
+       	strcpy(data[i]->accnt_type, "2030");
+        data[i]->sort_kamoku = 2;
+       }
+       else if( strcmp( data[i]->accnt_type, "2021" ) == 0 
+       	&& strcmp( data[i]->tsusho_kbn_id, "1" ) == 0 ){
+       	strcpy(data[i]->accnt_type, "2030");
+        data[i]->sort_kamoku = 2;
+       }
+       else if( strcmp( data[i]->accnt_type, "2098" ) == 0 
+       	&& strcmp( data[i]->tsusho_kbn_id, "1" ) == 0 ){
+       	strcpy(data[i]->accnt_type, "2030");
+        data[i]->sort_kamoku = 2;
+       }
+       else if( strcmp( data[i]->accnt_type, "2000" ) == 0 
+       	&& strcmp( data[i]->shikumi_yokin, "0" ) == 0 
+       	&& strcmp( data[i]->tsusho_kbn_id, "1" ) == 0 ){
+       	strcpy(data[i]->accnt_type, "2030");
+        data[i]->sort_kamoku = 2;
+       }
+       else if( strcmp( data[i]->accnt_type, "2011" ) == 0 
+       	&& strcmp( data[i]->shikumi_yokin, "1" ) == 0 
+       	&& strcmp( data[i]->tsusho_kbn_id, "2" ) == 0 ){
+       	strcpy(data[i]->accnt_type, "2039");
+        data[i]->sort_kamoku = 3;
+       }
+       else if( strcmp( data[i]->accnt_type, "2000" ) == 0 
+       	&& strcmp( data[i]->shikumi_yokin, "1" ) == 0 
+       	&& strcmp( data[i]->tsusho_kbn_id, "2" ) == 0 ){
+       	strcpy(data[i]->accnt_type, "2039");
+        data[i]->sort_kamoku = 3;
+       }
+       else if( strcmp( data[i]->accnt_type, "702" ) == 0 ){
+       	strcpy(data[i]->accnt_type, "2750");
+        data[i]->sort_kamoku = 4;
+       }
+       else if( strcmp( data[i]->accnt_type, "711" ) == 0 ){
+       	strcpy(data[i]->accnt_type, "2730");
+        data[i]->sort_kamoku = 5;
+       }
+       else{
+       	strcpy(data[i]->accnt_type, "");
+       	
+       	/* 対象外フラグを立てる */
+       	strcpy(data[i]->flg_not_ins, FLG_ON);
+       }
+       
+    }
+}
+
+/**
+ * 文字列の先頭と末尾にある空白を削除する
+ * @param[in] s  対象文字列
+ * @return 削除した空白の数を返す
+ */
+static int Trim(char *str) {
+    int i = 0;
+    int count = 0;
+
+    /* 空ポインタか? */
+    if ( str == NULL ) { 
+        return -1;
+    }
+
+    /* 文字列長を取得する */
+    i = strlen(str);
+
+    /* 末尾から順に空白でない位置を探す */
+    while ( --i >= 0 && str[i] == ' ' ) count++;
+
+    /* 終端ナル文字を付加する */
+    str[i+1] = '\0';
+
+    /* 先頭から順に空白でない位置を探す */
+    i = 0;
+    while ( str[i] != '\0' && str[i] == ' ' ) i++;
+    strcpy(str, &str[i]);
+
+    return i + count;
+}
+
+
+/* --------------- ソート用の関数 ------------------- */
+int compare( const void *p, const void *q ){
+    int cmp = 0;
+    
+    cmp = compareFlgToshin( p, q );
+    if( cmp != 0){
+        return cmp;
+    }
+    
+    cmp = compareFlgMousikomiten( p, q );
+    if(cmp != 0){
+        return cmp;
+    }
+    
+    cmp = compareKamoku( p, q );
+    if(cmp != 0){
+        return cmp;
+    }
+    
+    cmp = compareStartDate( p, q );
+    if(cmp != 0){
+        return cmp;
+    }
+    
+    return compareKozaNo( p, q );
+}
+int compareKozaNo( const void *p, const void *q ) {
+    int x = atoi( ((KOZA_DATA*)p)->accnt_no );
+    int y = atoi( ((KOZA_DATA*)q)->accnt_no );
+    return x - y;
+}
+int compareStartDate( const void *p, const void *q ) {
+    int x = atoi( ((KOZA_DATA*)p)->start_date );
+    int y = atoi( ((KOZA_DATA*)q)->start_date );
+  
+    return x - y;
+}
+int compareKamoku( const void *p, const void *q ) {
+    int comp = ((KOZA_DATA*)p)->sort_kamoku - ((KOZA_DATA*)q)->sort_kamoku;
+    
+    return comp;
+}
+int compareFlgMousikomiten( const void *p, const void *q ) {
+    int x = 0; 
+    int y = 0; 
+    if(strcmp( ((KOZA_DATA*)p)->flg_mousikomiten, FLG_ON ) == 0){
+        x = 1;
+    }
+    if(strcmp( ((KOZA_DATA*)q)->flg_mousikomiten, FLG_ON ) == 0){
+        y = 1;
+    }
+    
+    return y - x ;
+}
+int compareFlgToshin( const void *p, const void *q ) {
+    int x = atoi( ((KOZA_DATA*)p)->flg_toshin );
+    int y = atoi( ((KOZA_DATA*)q)->flg_toshin );
+    
+    return x - y;
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*          int chkBeforeIns( char *accnt_no, char *accnt_type               */
+/*                               , char *g_szDtlMsg )                        */
+/* Made by:                                                                  */
+/* Description : 口座登録処理前の各種チェックを行う                          */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* accnt_no        char*        I/O  口座番号                                */
+/* accnt_type      char*        I/O  科目ID                                  */
+/* g_szDtlMsg      char*        I/O  事象詳細文字列                          */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL       : 正常終了                                                */
+/*    ERROR        : 挿入エラー                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int chkBeforeIns( char *accnt_no, char *accnt_type, char *g_szDtlMsg )
+{
+
+	int rc;
+	
+    /* 利用口座の存在チェック */
+    h_TB_COUNT = 0;      /* テーブルカウント */
+    strcpy(h_AccntNo, accnt_no);      /* 口座番号 */
+    strcpy(h_AccntType, accnt_type);      /* 科目ID */
+    
+    G_POSITION = __LINE__;
+    EXEC SQL SELECT COUNT(*) INTO :h_TB_COUNT
+    FROM TFB_テレバン契約口座
+    WHERE 口座番号 = :h_AccntNo
+    	AND 科目ID = :h_AccntType
+    ; 
+   
+    if( sqlca.sqlcode != 0 ) {
+        sprintf( g_szDtlMsg,
+                "TFB_テレバン契約口座テーブルの検索に失敗しました。(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                       sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "SELECT TFB_テレバン契約口座", NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+    else if (h_TB_COUNT >= 1){
+        return(ERROR);
+    }
+        
+    /* 投信口座の場合 */
+    if( strcmp( accnt_type, "9000" ) == 0 ){
+    	
+    	/* 既に投信口座が登録されているかチェック */
+    	h_TB_COUNT = 0;      /* テーブルカウント */
+    	
+    	G_POSITION = __LINE__;
+    	EXEC SQL SELECT COUNT(*) INTO :h_TB_COUNT
+    	FROM TFB_テレバン契約口座
+    	WHERE 契約者番号 = :h_ContractorID
+    		AND 投信口座区分 = '1'
+    	; 
+   
+    	if( sqlca.sqlcode != 0 ) {
+    	    sprintf( g_szDtlMsg,
+    	            "TFB_テレバン契約口座テーブルの検索に失敗しました。(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+    	                   sqlca.sqlcode, h_ContractorID, h_CIFNO);
+    	    send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+    	    send_err ( m$sql_statment, sqlca.sqlcode, "SELECT TFB_テレバン契約口座", NULL, NULL, G_STATION);
+    	    return(ERROR);
+    	}
+    	else if (h_TB_COUNT >= 1){
+    	    sprintf( g_szDtlMsg,
+    	            "【翌営業日連絡】投信口座は既に設定済です。口座番号:%s、CIFNO:%s",
+    	                   h_AccntNo, h_CIFNO);
+    	    send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+    	    send_err ( m$sql_statment, sqlca.sqlcode, "SELECT TFB_テレバン契約口座", NULL, NULL, G_STATION);
+    	    return(ERROR);
+    	}
+    	
+    	/* 普通預金が利用口座に登録済かチェック */
+    	if ( (rc = chkToshinKozaState( accnt_no, g_szDtlMsg )) != NORMAL ){
+    	    return(ERROR);
+    	}
+    }
+    
+    /* 利用口座の最大登録件数チェック */
+    h_TB_COUNT = 0;
+    
+    G_POSITION = __LINE__;
+    EXEC SQL SELECT COUNT(*) INTO :h_TB_COUNT
+    FROM TFB_テレバン契約口座
+    WHERE 契約者番号 = :h_ContractorID
+    ;
+    if( sqlca.sqlcode != 0 ) {
+        sprintf( g_szDtlMsg,
+                "TFB_テレバン契約口座受付テーブルの検索に失敗しました。(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                       sqlca.sqlcode, h_ContractorID, h_CIFNO);
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "SELECT TFB_テレバン契約口座受付", NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+    else if (h_TB_COUNT >= 20){
+        sprintf( g_szDtlMsg,
+               "【翌営業日連絡】利用口座の最大登録件数を超過しました。口座番号:%s、CIFNO:%s ",
+               h_AccntNo, h_CIFNO);
+        send_err ( m$message1, 0, g_szDtlMsg, NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+    
+    return NORMAL;
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*          int chkToshinKozaState( char *accnt_no, char *g_szDtlMsg )       */
+/* Made by:                                                                  */
+/* Description : 投信口座のチェックを行う                                    */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* accnt_no        char*        I/O  口座番号                                */
+/* g_szDtlMsg      char*        I/O  事象詳細文字列                          */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL       : 正常終了                                                */
+/*    ERROR        : 挿入エラー                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int chkToshinKozaState( char *accnt_no, char *g_szDtlMsg )
+{
+    /*
+    **  TF_個別明細投信口座テーブルから情報を取得する。
+    */
+    
+    memset( h_AccntNo,                   0x00, sizeof(h_AccntNo) );
+    memset( h_AccntTypeTsn,              0x00, sizeof(h_AccntTypeTsn) );
+    memset( h_FurikomiShitenID,          0x00, sizeof(h_FurikomiShitenID) );
+    memset( h_AccntNoTsn,                0x00, sizeof(h_AccntNoTsn) );
+    
+    strcpy(h_AccntNo, accnt_no);                      /* 口座番号       */
+    strcpy(h_AccntTypeTsn, KAMOKU_FUTSU_TOSHIN);      /* 科目ID（投信） */
+    
+    G_POSITION = __LINE__;
+    EXEC SQL SELECT 振込支店ID, 振込口座
+		INTO				
+			:h_FurikomiShitenID :h_ind_FurikomiShitenID
+			, :h_AccntNoTsn :h_ind_AccntNoTsn
+		FROM				
+			TF_個別明細投信口座		
+		WHERE
+			口座番号 = :h_AccntNo
+			AND 科目ID = :h_AccntTypeTsn
+    	;
+    	
+    if( sqlca.sqlcode != 0 ) {
+        sprintf( g_szDtlMsg,
+                "TF_個別明細投信口座テーブルの検索に失敗しました。(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s、科目ID：%s",
+                       sqlca.sqlcode, h_ContractorID,h_CIFNO, h_AccntTypeTsn);
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "SELECT TF_個別明細投信口座", NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+    
+    /*
+    **  投信口座に紐づける普通預金口座の存在チェック
+    */
+    h_TB_COUNT = 0;      /* テーブルカウント */
+    
+    G_POSITION = __LINE__;
+    EXEC SQL SELECT COUNT(*) INTO :h_TB_COUNT
+    FROM TFB_テレバン契約口座
+    WHERE CIFNO =  :h_CIFNO
+    	AND 店番 = :h_FurikomiShitenID
+    	AND 口座番号 = :h_AccntNoTsn
+    	AND 科目ID = '2050'
+    ; 
+    
+    if( sqlca.sqlcode != 0 ) {
+        sprintf( g_szDtlMsg,
+                "TFB_テレバン契約口座テーブルの検索に失敗しました。(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                       sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "SELECT TFB_テレバン契約口座", NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+    
+    if( h_TB_COUNT == 0 ) {
+        sprintf( g_szDtlMsg,
+                "【翌営業日連絡】投信口座に紐づける普通預金口座が存在しません。口座番号:%s、CIFNO:%s",
+                       h_AccntNo,h_CIFNO);
+        send_err ( m$message1, 0, g_szDtlMsg, NULL, NULL, G_STATION);
+        return(ERROR);
+    }    
+    
+    return(NOMAL);
+}
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*          int insKoza( KOZA_DATA *data                                     */
+/*                        , char *h_ContractorID, char *g_szDtlMsg )         */
+/* Made by:                                                                  */
+/* Description : TFB_テレバン契約口座登録処理                                */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* data            KOZA_DATA*   I/O  構造体配列                              */
+/* g_szDtlMsg      char*        I/O  事象詳細文字列                          */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL       : 正常終了                                                */
+/*    ERROR        : 挿入エラー                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int insKoza( KOZA_DATA *data, char *h_ContractorID, char *g_szDtlMsg )
+{
+
+    /* TFB_テレバン契約口座登録処理 */
+    int rc;
+    int len;
+    
+    memset( h_ins_ContractorID,         0x00, sizeof(h_ins_ContractorID) );
+    memset( h_ins_BranchId,             0x00, sizeof(h_ins_BranchId) );
+    memset( h_ins_CIFNO,                0x00, sizeof(h_ins_CIFNO) );
+    memset( h_ins_AccntType,            0x00, sizeof(h_ins_AccntType) );
+    memset( h_ins_AccntNo,              0x00, sizeof(h_ins_AccntNo) );
+    memset( h_ins_TsukaId,              0x00, sizeof(h_ins_TsukaId) );
+    memset( h_ins_FlgToshin,            0x00, sizeof(h_ins_FlgToshin) );
+    
+    strcpy(h_ins_ContractorID, h_ContractorID);
+    strcpy(h_ins_BranchId, data->branch_id);
+    strcpy(h_ins_CIFNO, h_CIFNO);
+    strcpy(h_ins_AccntType, data->accnt_type);
+    strcpy(h_ins_AccntNo, data->accnt_no);
+    
+    /* 通貨IDを設定する */
+    if( strcmp( data->accnt_type, "2750" ) == 0 
+    	||  strcmp( data->accnt_type, "2730" ) == 0 ){
+    	
+        if(data->tsuka_ryakusyo != NULL || strcmp( data->tsuka_ryakusyo, "" ) != 0 ){
+	        len =Trim( data->tsuka_ryakusyo );
+        }
+        
+		strcpy(tsuka_id, data->tsuka_ryakusyo);
+    }
+    else{
+		strcpy(tsuka_id, "JPY");
+    }
+    
+    strcpy(h_ins_TsukaId, tsuka_id);
+    strcpy(h_ins_FlgToshin, data->flg_toshin);
+	
+    /*  データINSERT    */
+	G_POSITION = __LINE__;
+	EXEC SQL INSERT INTO TFB_テレバン契約口座
+    (   契約者番号,
+		口座登録番号,
+		店番,
+		CIFNO,
+		科目ID,
+		口座種類ID,
+		口座番号,
+		口座口番号,
+		通貨ID,
+		代表口座区分,
+		投信口座区分,
+		設定日付,
+		解除日付,
+		登録日,
+		登録者,
+		最終更新日,
+		最終更新者
+
+    ) VALUES (
+        :h_ins_ContractorID,
+		NULL,
+		:h_ins_BranchId,
+		:h_ins_CIFNO,
+		:h_ins_AccntType,
+		'00',
+		:h_ins_AccntNo,
+		NULL,
+		:h_ins_TsukaId,
+		'0',
+		:h_ins_FlgToshin,
+		TO_CHAR(SYSDATE,'YYYYMMDD'),
+		NULL,
+		SYSDATE,
+		'SPV',
+		SYSDATE,
+		'SPV'
+    );
+
+	if ( sqlca.sqlcode < 0 ){
+        sprintf( g_szDtlMsg,
+                 "TFB_テレバン契約口座のINSERTに失敗しました。(sqlca.sqlcode=%d)",
+                 sqlca.sqlcode );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+		send_err ( m$sql_statment, sqlca.sqlcode, "INSERT TFB_テレバン契約口座", NULL, NULL, G_STATION);
+		return ERROR;
+    }     
+    
+    /* 投信口座登録の場合は普通預金口座の投信口座区分を更新する */
+	if ( strcmp( h_ins_AccntType, "9000" ) == 0 ){
+        
+		if( (rc = updToshinKbn( data->accnt_no, g_szDtlMsg )) != NORMAL ){
+    		return ERROR;
+		}
+    }
+    
+    return NOMAL;
+}
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*          int updToshinKbn( char *accnt_no, char *g_szDtlMsg )             */
+/* Made by:                                                                  */
+/* Description : 投信口座区分の更新を行う                                    */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* accnt_no        char*        I/O  口座番号                                */
+/* g_szDtlMsg      char*        I/O  事象詳細文字列                          */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL       : 正常終了                                                */
+/*    ERROR        : 挿入エラー                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int updToshinKbn( char *accnt_no, char *g_szDtlMsg )
+{
+    /*
+    **  TF_個別明細投信口座テーブルから情報を取得する。
+    */
+    
+    memset( h_AccntNo,                   0x00, sizeof(h_AccntNo) );
+    memset( h_AccntTypeTsn,              0x00, sizeof(h_AccntTypeTsn) );
+    memset( h_FurikomiShitenID,          0x00, sizeof(h_FurikomiShitenID) );
+    memset( h_AccntNoTsn,                0x00, sizeof(h_AccntNoTsn) );
+    
+    strcpy(h_AccntNo, accnt_no);                      /* 口座番号       */
+    strcpy(h_AccntTypeTsn, KAMOKU_FUTSU_TOSHIN);      /* 科目ID（投信） */
+    
+    G_POSITION = __LINE__;
+    EXEC SQL SELECT 振込支店ID, 振込口座
+		INTO				
+			:h_FurikomiShitenID :h_ind_FurikomiShitenID
+			, :h_AccntNoTsn :h_ind_AccntNoTsn
+		FROM				
+			TF_個別明細投信口座		
+		WHERE
+			口座番号 = :h_AccntNo
+			AND 科目ID = :h_AccntTypeTsn
+    	;
+    	
+    if( sqlca.sqlcode != 0 ) {
+        sprintf( g_szDtlMsg,
+                "TF_個別明細投信口座テーブルの検索に失敗しました。(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
+                       sqlca.sqlcode, h_ContractorID,h_CIFNO);
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "SELECT TF_個別明細投信口座", NULL, NULL, G_STATION);
+        return(ERROR);
+    }
+    
+    /*  データUPDATE    */
+	G_POSITION = __LINE__;
+	EXEC SQL UPDATE TFB_テレバン契約口座 
+		SET 投信口座区分 = '1'
+    	WHERE CIFNO =  :h_CIFNO
+    		AND 店番 = :h_FurikomiShitenID
+    		AND 口座番号 = :h_AccntNoTsn
+    		AND 科目ID = '2050'
+    	;
+
+	if ( sqlca.sqlcode < 0 ){
+        sprintf( g_szDtlMsg,
+                 "TFB_テレバン契約口座のUPDATEに失敗しました。(sqlca.sqlcode=%d)",
+                 sqlca.sqlcode );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+		send_err ( m$sql_statment, sqlca.sqlcode, "UPDATE TFB_テレバン契約口座", NULL, NULL, G_STATION);
+		return ERROR;
+    }
+    
+    return(NOMAL);
+}
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*          int chkDateOfBirth( )                                            */
+/* Made by:                                                                  */
+/* Description : 生年月日と当バッチ処理日から年齢を算出する                  */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    TRUE       : 1                                                        */
+/*    FALSE      : 0                                                        */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int chkDateOfBirth(  )
+{
+    /* 生年月日と当バッチ処理日から年齢を算出する */
+    int age = 0;
+    int time_now = 0;
+    time_t timer = time(NULL);
+    struct tm *date = localtime(&timer); 
+	time_now = ( date->tm_year + 1900 ) * 10000 
+		+ ( date->tm_mon + 1 ) * 100 
+		+ date->tm_mday
+		; 
+    age = ( time_now - atoi(h_DateOfBirth) ) / 10000;
+    
+    if(age < 20){
+    	return FALSE;
+    }
+    return TRUE;
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*     putAcctLogFile(int tp, KOZA_DATA **data, COUNT *dCount, int rc,       */
+/*                                                        char *g_szDtlMsg ) */
+/* Made by:                                                                  */
+/* Description : ログファイル出力                                            */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/* tp                int         I    ログタイプ識別                         */
+/* RECV_FILE_KOZA_DATA    *pData      I    更新対象レコード情報を格納している     */
+/* COUNT             *dCount     I    処理件数を格納している                 */
+/* rc                int         I    処理結果を格納している                 */
+/* g_szDtlMsg        char*      I/O   事象詳細文字列                         */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL: 正常                                                           */
+/*    ERROR : ファイルアクセスエラー                                         */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int putAcctLogFile(int tp, KOZA_DATA **data, COUNT *dCount, int rc, char *g_szDtlMsg )
+{
+    AP_D_BTLOG log;
+    char    szTime[EMB_C_DTIME_LEN + 1];
+    time_t  t = time( NULL );
+
+    /* バッファ初期化 */
+    memset( &log, ' ', sizeof(log));
+    log.szDelimit[0] = 0x0a;
+    log.szDelimit1[0] = 0x0a;
+
+    if (tp == L_WRITE_END){
+        sprintf( log.szNote, 
+                 "[ RECORD COUNT:%d <OK>:%d  <NG>:%d ]",
+                 dCount->iRecNum,                    /* 処理件数             */
+                 dCount->iOkNum,                     /* 正常終了             */
+                 dCount->iNgNum );                   /* ERROR終了            */
+        
+        sprintf ( g_szDtlMsg,
+                "[ RECORD COUNT:%d <OK>:%d  <NG>:%d ]",
+                 dCount->iRecNum,                    /* 処理件数             */
+                 dCount->iOkNum,                     /* 正常終了             */
+                 dCount->iNgNum );                   /* ERROR終了            */
+
+        send_err (  m$message1, NORMAL, g_szDtlMsg, NULL , NULL, G_STATION);
+        
+        /* NG件数がある場合は、ログに出力する */
+        if ( dCount->iNgNum != 0 ) {
+            sprintf( g_szDtlMsg, "処理できないデータが %d 件あります。詳細は処理結果ファイルを確認ください",dCount->iNgNum );
+            send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        }
+
+
+    }else{
+        /* 現状NORMAL正常時は処理しない。（以下に処理だけは残しておく）*/
+        if ( rc == NORMAL ) return NORMAL;
+
+        /* リターンコード編集 */
+        switch( rc ) {
+            case NORMAL:
+                memcpy( log.szRtInfo, "NORMAL",       6); /* 正常終了                  */
+                break;
+            case ERROR:
+                memcpy( log.szRtInfo, "ERROR",        5); /* エラー                    */
+                break;
+            default:
+                memcpy( log.szRtInfo, "NONE",         4); /* その他                    */
+                break;
+        }
+
+        if (rc != NORMAL){
+            memcpy( log.szRtType, " NG ", 4); /* エラー表示    */
+        }
+        else{
+            memcpy( log.szRtType, " OK ", 4); /* 正常終了表示  */
+        }
+        /* 日時 */
+        strftime( szTime, EMB_C_DTIME_LEN + 1, "%Y-%m-%d %H:%M:%S", localtime( &t ));
+        memcpy( log.szDateTime,szTime, EMB_C_DTIME_LEN );
+
+        /* 事象発生詳細レコード番号、事象詳細文字列 */
+        sprintf( log.szNote1, "(%d) %.*s", dCount->iRecNum,
+                                           (unsigned int)strlen(g_szDtlMsg), g_szDtlMsg );
+    }
+
+    return NORMAL;
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*     memoryFree( int count_all )                                           */
+/* Made by:                                                                  */
+/* Description:ＤＢのコミット                                                */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/*  count_all      int          O    事象詳細文字列                          */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL : 正常                                                          */
+/*    ERROR  : コミットエラー（システムエラー）                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int memoryFree( KOZA_DATA *data_1, KOZA_DATA **data_2, int count_all )
+{
+    /* メモリ開放 */
+    if(data_2 != NULL){
+	    free(data_2);
+    }
+    data_2 = NULL;
+    
+    if(data_1 != NULL){
+	    free(data_1);
+    }
+    data_1 = NULL;
+            
+    return NORMAL;
+}
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*     commit( void )                                                        */
+/* Made by:                                                                  */
+/* Description:ＤＢのコミット                                                */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/*  g_szDtlMsg      *char         O    事象詳細文字列                        */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL : 正常                                                          */
+/*    ERROR  : コミットエラー（システムエラー）                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int commit( VOID )
+{
+
+    /* ＤＢのコミット */
+	G_POSITION = __LINE__;
+    EXEC SQL COMMIT;
+    if (sqlca.sqlcode < 0) {
+        sprintf(g_szDtlMsg,
+                "ＤＢのコミットに失敗しました。(CODE=%ld)",
+                sqlca.sqlcode);
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+
+
+    return NORMAL;
+}
+
+
+
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*     rollback( void )                                                      */
+/* Made by:                                                                  */
+/* Description:ＤＢのロールバック                                            */
+/* Arguments:                                                                */
+/*   Name          Type/Length  I/O    Content                               */
+/* --------------  -----------  ---  -----------------------------------     */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL : 正常                                                          */
+/*    ERROR  : ロールバックエラー（システムエラー）                          */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int rollback( )
+{
+    
+	/* ＤＢのロールバック */
+	G_POSITION = __LINE__;
+    EXEC SQL ROLLBACK WORK;
+    if (sqlca.sqlcode < 0) {
+        sprintf(g_szDtlMsg,
+                "ＤＢのロールバックに失敗しました。(CODE=%ld)",
+                sqlca.sqlcode);
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        return ERROR;
+    }
+
+    return NORMAL;
+}
+
