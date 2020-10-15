@@ -316,8 +316,8 @@ int main( int argc, char *argv[] )
     strcat(sqlcmd, "END AS 有人店フラグ, ");
     strcat(sqlcmd, "TFB_テレバン契約属性.生年月日 ");
     strcat(sqlcmd, "FROM ");
-    strcat(sqlcmd, "TF_顧客属性 LEFT JOIN ");
-    strcat(sqlcmd, "TFB_テレバン契約属性 ON TRIM(TF_顧客属性.CIFNO) = TRIM(TFB_テレバン契約属性.CIFNO) ");
+    strcat(sqlcmd, "TFB_テレバン契約属性 LEFT JOIN ");
+    strcat(sqlcmd, "TF_顧客属性 ON TRIM(TF_顧客属性.CIFNO) = TRIM(TFB_テレバン契約属性.CIFNO) ");
     strcat(sqlcmd, "WHERE ");
     strcat(sqlcmd, "TF_顧客属性.テレバン契約 != '");
     strcat(sqlcmd, KBN_KAIYAKU);    
