@@ -1319,7 +1319,7 @@ static int getToshin( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
         EXEC SQL FETCH CUR_TOUSHIN INTO 
             :h_BranchId      :h_ind_BranchId,
             :h_AccntType     :h_ind_AccntType,      
-            :h_AccntNo       :h_ind_AccntNo       
+            :h_AccntNo       :h_ind_AccntNo,       
             :h_StartDate     :h_ind_StartDate      
             ;
             
@@ -1489,28 +1489,25 @@ static void chgAccntType( KOZA_DATA **data, int count_all )
        else if( strncmp(h_ZentenFlg, FLG_ON, 1) != 0 && strcmp( data[i]->flg_mousikomiten, FLG_ON ) != 0 ) {
 
            if( strcmp( data[i]->accnt_type, "2011" ) == 0 
-               && strcmp( data[i]->shikumi_yokin, "0" ) == 0 )
+               && strcmp( data[i]->shikumi_yokin, "0" ) == 0 
                ){
                strcpy(data[i]->accnt_type, "2030");
                data[i]->sort_kamoku = 2;
            }
-           else if( strcmp( data[i]->accnt_type, "2012" ) == 0 )
-               ){
+           else if( strcmp( data[i]->accnt_type, "2012" ) == 0 ){
                strcpy(data[i]->accnt_type, "2030");
                data[i]->sort_kamoku = 2;
            }
-           else if( strcmp( data[i]->accnt_type, "2021" ) == 0 )
-               ){
+           else if( strcmp( data[i]->accnt_type, "2021" ) == 0 ){
                strcpy(data[i]->accnt_type, "2030");
                data[i]->sort_kamoku = 2;
            }
-           else if( strcmp( data[i]->accnt_type, "2098" ) == 0 )
-               ){
+           else if( strcmp( data[i]->accnt_type, "2098" ) == 0 ){
                strcpy(data[i]->accnt_type, "2030");
                data[i]->sort_kamoku = 2;
            }
            else if( strcmp( data[i]->accnt_type, "2000" ) == 0 
-               && strcmp( data[i]->shikumi_yokin, "0" ) == 0 )
+               && strcmp( data[i]->shikumi_yokin, "0" ) == 0 
                ){
                strcpy(data[i]->accnt_type, "2030");
                data[i]->sort_kamoku = 2;
@@ -1742,7 +1739,7 @@ static int chkBeforeIns( char *accnt_no, char *accnt_type, char *branch_id
         }
         
         /* 普通預金が利用口座に登録済かチェック */
-        if ( (rc = chkToshinKozaState( accnt_no, g_szDtlMsg )) != NORMAL ){
+        if ( (rc = chkToshinKozaState( accnt_no, no_furikomisaki_flg, g_szDtlMsg )) != NORMAL ){
             return(ERROR);
         }
         
@@ -1783,7 +1780,8 @@ static int chkBeforeIns( char *accnt_no, char *accnt_type, char *branch_id
 
 /*****************************************************************************/
 /* Function Name:                                                            */
-/*          int chkToshinKozaState( char *accnt_no, char *g_szDtlMsg )       */
+/*          int chkToshinKozaState( char *accnt_no                           */
+/*                       , int no_furikomisaki_flg, char *g_szDtlMsg )       */
 /* Made by:                                                                  */
 /* Description : 投信口座のチェックを行う                                    */
 /* Arguments:                                                                */
