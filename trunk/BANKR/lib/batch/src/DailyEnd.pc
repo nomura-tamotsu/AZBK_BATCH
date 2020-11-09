@@ -26,6 +26,7 @@
 /*-----+----------+-------------+-------------------------------------------*/
 /* %00 | 14/05/01 | ISID        | First Edition.                            */
 /* %01 | 20/10/28 | ISID        | 受付システム 受付ログインフラグ追加対応   */
+/* %02 | 20/11/06 | ISID        | 受付システム 未処理の都度振込承認履歴削除 */
 /*==========================================================================*/
 /*--------------------------------------------------------------------------*/
 /* Standard include specification                                           */
@@ -202,6 +203,25 @@ char    *argv[];
 		exit_code = ERROR ;
         goto ENDPROC_NG;
     }
+
+/* 2020/11/06 受付システム start */
+	/* ----------------------------------------------- */
+    /* 承認状況が未承認(0)のTHB_都度振込承認履歴を削除 */
+    /* ----------------------------------------------- */
+    G_POSITION = __LINE__;
+    EXEC SQL DELETE FROM THB_都度振込承認履歴
+		WHERE 
+		承認状況 = '0';
+    if (sqlca.sqlcode < 0) {
+        sprintf( g_szDtlMsg, 
+                 "THB_都度振込承認履歴(未承認データ)の削除に失敗しました。(sqlca.sqlcode=%d)",
+                 sqlca.sqlcode );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+		send_err ( m$sql_statment, sqlca.sqlcode, "DELETE THB_都度振込承認履歴", NULL, NULL, G_STATION);
+		exit_code = ERROR ;
+        goto ENDPROC_NG;
+    }
+/* 2020/11/06 受付システム end */
 
 
 
