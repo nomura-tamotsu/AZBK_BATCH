@@ -64,6 +64,8 @@ typedef struct _KOZA_DATA {
     char    flg_mousikomiten [2];     /* TB申込店フラグ */
     char    flg_not_ins      [2];     /* 対象外フラグ */
     int     sort_kamoku         ;     /* ソート順（科目） */
+    int     flg_no_furikomisaki ;     /* 振込先未登録フラグ */
+    char    flg_is_bank      [2];     /* BANK支店フラグ */
 } KOZA_DATA ;
 
 /*---------------------------------------------------------------------------*/
@@ -98,8 +100,6 @@ int  count_line;                                     /* カウント（ライン）      
 int  tm_year;                                        /* 現在年         　　　　　　  */
 int  tm_mon;                                         /* 現在月           　　　　　  */
 int  tm_mday;                                        /* 現在日           　　　　　  */
-
-int  result_sort;
 
 int  i;
 int  j;
@@ -149,6 +149,8 @@ EXEC SQL BEGIN DECLARE SECTION;
     short    h_ind_TsukaRyakusyo;
     char    h_StartDate           [9];                  /* 口座開設年月日・登録年月日 */
     short    h_ind_StartDate;
+    char    h_IsBankFlg           [2];                  /* BANK支店フラグ         */
+    short    h_ind_IsBankFlg;
     
     /* 投信口座テーブル */
     char    h_FurikomiBankID   [6];                     /* 振込銀行ID                 */
@@ -195,11 +197,10 @@ static int compareStartDate( const void *p, const void *q );
 static int compareKamoku( const void *p, const void *q );
 static int compareFlgMousikomiten( const void *p, const void *q );
 static int compareFlgToshin( const void *p, const void *q );
-static int chkBeforeIns(  char *accnt_no, char *accnt_type, char *branch_id
-                            , char *tsuka_ryakusyo, int no_furikomisaki_flg, char *g_szDtlMsg );
-static int chkToshinKozaState( char *accnt_no, int no_furikomisaki_flg, char *g_szDtlMsg );
-static int insKoza( KOZA_DATA *data, char *h_ContractorID, int no_furikomisaki_flg, char *g_szDtlMsg );
-static int updFurikomiSaki( char *accnt_no, int no_furikomisaki_flg, char *g_szDtlMsg );
+static int chkBeforeIns(  KOZA_DATA *data, char *h_ContractorID, char *g_szDtlMsg );
+static int chkToshinKozaState( KOZA_DATA *data, char *g_szDtlMsg );
+static int insKoza( KOZA_DATA *data, char *h_ContractorID, char *g_szDtlMsg );
+static int updFurikomiSaki( KOZA_DATA *data, char *g_szDtlMsg );
 static int chkDateOfBirth( char *start_date );
 static int Trim(char *s);
 
@@ -249,7 +250,6 @@ int main( int argc, char *argv[] )
     KOZA_DATA   *tmp; 
     int         count_kokyaku = 0; 
     int         count_line = 0; 
-    int         no_furikomisaki_flg = 0;        /* 振込先未登録フラグ           */
     
 /*==========================================================================*/
 /*      INITIALIZATION                                                      */
@@ -403,6 +403,7 @@ int main( int argc, char *argv[] )
         if ( (rc = chkDaihyoKoza( g_szDtlMsg )) != NORMAL ){
             continue;
         }
+        
         /* ----------------------------------------------------------------- */
         /* テレバン契約者の編集中（承認待ちまたは却下待ち）のチェックを行う  */
         /* ----------------------------------------------------------------- */
@@ -451,21 +452,16 @@ int main( int argc, char *argv[] )
         }
         count_line += rc;
                 
-        /* 生年月日と口座開設年月日から年齢を算出し、 
-        ** 20歳以上の場合は利用口座の登録対象のため、
-        ** TF_個別明細投信口座から契約口座情報を取得する
-        */
-        if(chkDateOfBirth( pData[i]->start_date ) == TRUE){
+        /* TF_個別明細投信口座から契約口座情報を取得する */
         
-            rc = getToshin( pData, count_line,  g_szDtlMsg );
-            if ( rc == -1 ){
-                /* メモリ開放 */
-                memoryFree( dData, pData, MAX_DATA );
-                
-                continue;
-            }
-            count_line += rc;
+        rc = getToshin( pData, count_line,  g_szDtlMsg );
+        if ( rc == -1 ){
+            /* メモリ開放 */
+            memoryFree( dData, pData, MAX_DATA );
+            
+            continue;
         }
+        count_line += rc;
                 
         /* ------------------------------------------ */
         /* 科目IDを変換する                           */
@@ -498,15 +494,12 @@ int main( int argc, char *argv[] )
             }
             
             /* 口座登録処理前の各種チェックを行う */
-            if ( (rc = chkBeforeIns( pData[i]->accnt_no, pData[i]->accnt_type
-                          , pData[i]->branch_id, pData[i]->tsuka_ryakusyo
-                          , no_furikomisaki_flg, g_szDtlMsg )) != NORMAL ){                
+            if ( (rc = chkBeforeIns( pData[i], h_ContractorID, g_szDtlMsg )) != NORMAL ){                
                     continue;
             }
             
             /* TFB_テレバン契約口座登録処理 */
-            if ( (rc = insKoza( pData[i], h_ContractorID
-                    , no_furikomisaki_flg, g_szDtlMsg )) == NORMAL ) {
+            if ( (rc = insKoza( pData[i], h_ContractorID, g_szDtlMsg )) == NORMAL ) {
                 /* ＤＢのコミット */
                 rc = commit();
             }
@@ -514,7 +507,7 @@ int main( int argc, char *argv[] )
                 rollback();
             }
         }
-                
+        
         /* メモリ開放 */
         memoryFree( dData, pData, count_line );
         
@@ -753,7 +746,12 @@ static int getKoteisei( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
     strcat(sqlcmd_local, "口座番号, ");
     strcat(sqlcmd_local, "仕組預金, ");
     strcat(sqlcmd_local, "通証区分ID, ");
-    strcat(sqlcmd_local, "口座開設年月日 ");
+    strcat(sqlcmd_local, "口座開設年月日, ");
+    strcat(sqlcmd_local, "CASE WHEN 店番 IN ( ");
+    strcat(sqlcmd_local, BANK_SHITEN);
+    strcat(sqlcmd_local, " ) THEN '");
+    strcat(sqlcmd_local, FLG_ON);
+    strcat(sqlcmd_local, "' ELSE '' END ");
     strcat(sqlcmd_local, "FROM ");
     strcat(sqlcmd_local, "TF_個別明細固定性預金 ");
     strcat(sqlcmd_local, "WHERE ");
@@ -826,6 +824,7 @@ static int getKoteisei( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
         memset( h_ShikumiYokin,             0x00, sizeof(h_ShikumiYokin) );
         memset( h_TsushoKbnId,              0x00, sizeof(h_TsushoKbnId) );
         memset( h_StartDate,                0x00, sizeof(h_StartDate) );
+        memset( h_IsBankFlg,                0x00, sizeof(h_IsBankFlg) );
         
         G_POSITION = __LINE__;
         EXEC SQL FETCH CUR_KOTEISEI INTO 
@@ -834,7 +833,8 @@ static int getKoteisei( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
             :h_AccntNo       :h_ind_AccntNo,        
             :h_ShikumiYokin  :h_ind_ShikumiYokin,        
             :h_TsushoKbnId   :h_ind_TsushoKbnId,        
-            :h_StartDate     :h_ind_StartDate      
+            :h_StartDate     :h_ind_StartDate,           
+            :h_IsBankFlg     :h_ind_IsBankFlg      
             ;
         
             if (sqlca.sqlcode == ORA_NOF){
@@ -860,7 +860,10 @@ static int getKoteisei( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
             strcpy(data[i]->flg_mousikomiten, "");
         }
         strcpy(data[i]->flg_not_ins, "");
+        strcpy(data[i]->flg_is_bank, h_IsBankFlg);
         data[i]->sort_kamoku = 1;
+        data[i]->flg_no_furikomisaki = 0;
+        
         i++;
         getCount++;
 
@@ -912,7 +915,12 @@ static int getRyudosei( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
     strcat(sqlcmd_local, "科目ID, ");
     strcat(sqlcmd_local, "口座番号, ");
     strcat(sqlcmd_local, "通証区分ID, ");
-    strcat(sqlcmd_local, "口座開設年月日 ");
+    strcat(sqlcmd_local, "口座開設年月日, ");
+    strcat(sqlcmd_local, "CASE WHEN 店番 IN ( ");
+    strcat(sqlcmd_local, BANK_SHITEN);
+    strcat(sqlcmd_local, " ) THEN '");
+    strcat(sqlcmd_local, FLG_ON);
+    strcat(sqlcmd_local, "' ELSE '' END ");
     strcat(sqlcmd_local, "FROM ");
     strcat(sqlcmd_local, "TF_個別明細流動性預金 ");
     strcat(sqlcmd_local, "WHERE ");
@@ -984,6 +992,7 @@ static int getRyudosei( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
         memset( h_AccntNo,                  0x00, sizeof(h_AccntNo) );
         memset( h_TsushoKbnId,              0x00, sizeof(h_TsushoKbnId) );
         memset( h_StartDate,                0x00, sizeof(h_StartDate) );
+        memset( h_IsBankFlg,                0x00, sizeof(h_IsBankFlg) );
         
         G_POSITION = __LINE__;
         EXEC SQL FETCH CUR_RYUDOSEI INTO 
@@ -991,7 +1000,8 @@ static int getRyudosei( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
             :h_AccntType     :h_ind_AccntType,      
             :h_AccntNo       :h_ind_AccntNo,          
             :h_TsushoKbnId   :h_ind_TsushoKbnId,       
-            :h_StartDate     :h_ind_StartDate     
+            :h_StartDate     :h_ind_StartDate,           
+            :h_IsBankFlg     :h_ind_IsBankFlg      
             ;
             
         if (sqlca.sqlcode == ORA_NOF){
@@ -1018,7 +1028,10 @@ static int getRyudosei( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
             strcpy(data[i]->flg_mousikomiten, "");
         }
         strcpy(data[i]->flg_not_ins, "");
+        strcpy(data[i]->flg_is_bank, h_IsBankFlg);
         data[i]->sort_kamoku = 1;
+        data[i]->flg_no_furikomisaki = 0;
+        
         i++;
         getCount++;
     }
@@ -1071,7 +1084,12 @@ static int getGaika( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
     strcat(sqlcmd_local, "TF_個別明細外貨預金.科目ID, ");
     strcat(sqlcmd_local, "TF_個別明細外貨預金.口座番号, ");
     strcat(sqlcmd_local, "TF_個別明細外貨預金.登録年月日, ");
-    strcat(sqlcmd_local, "TRIM(TM_通貨.通貨略称) ");
+    strcat(sqlcmd_local, "TRIM(TM_通貨.通貨略称), ");
+    strcat(sqlcmd_local, "CASE WHEN TF_個別明細外貨預金.店番 IN ( ");
+    strcat(sqlcmd_local, BANK_SHITEN);
+    strcat(sqlcmd_local, " ) THEN '");
+    strcat(sqlcmd_local, FLG_ON);
+    strcat(sqlcmd_local, "' ELSE '' END ");
     strcat(sqlcmd_local, "FROM ");
     strcat(sqlcmd_local, "TF_個別明細外貨預金 ");
     strcat(sqlcmd_local, "LEFT JOIN ");
@@ -1087,7 +1105,7 @@ static int getGaika( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
     strcat(sqlcmd_local, TENBAN_CC_HONNBU);
     strcat(sqlcmd_local, " ) ");
 
-    strcat(sqlcmd_local, "AND 科目ID = '711' ");
+    strcat(sqlcmd_local, "AND ( 科目ID = '711' ");
     strcat(sqlcmd_local, "OR ( 科目ID = '702' ");
     strcat(sqlcmd_local, "AND NOT EXISTS ( ");
     strcat(sqlcmd_local, "SELECT 1 FROM TMB_自動登録対象外口座 ");
@@ -1096,13 +1114,15 @@ static int getGaika( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
     strcat(sqlcmd_local, "AND TMB_自動登録対象外口座.科目ID =  TF_個別明細外貨預金.科目ID ");
     strcat(sqlcmd_local, "AND TMB_自動登録対象外口座.口座番号 =  TF_個別明細外貨預金.口座番号 ");
     strcat(sqlcmd_local, "AND TMB_自動登録対象外口座.通貨ID =  TM_通貨.通貨略称 ");
-    strcat(sqlcmd_local, ") ) ");
+    strcat(sqlcmd_local, ") ) ) ");
+    
     if( strncmp(h_ZentenFlg, FLG_ON, 1) != 0 ){
         strcat(sqlcmd_local, "AND 店番 = ");
         strcat(sqlcmd_local, "'");
         strcat(sqlcmd_local, h_TBMoushikomiten);    
         strcat(sqlcmd_local, "' "); 
     }
+    
     strcat(sqlcmd_local, "ORDER  BY 登録年月日");
     
     G_POSITION = __LINE__;
@@ -1152,6 +1172,7 @@ static int getGaika( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
         memset( h_AccntNo,                  0x00, sizeof(h_AccntNo) );
         memset( h_StartDate,                0x00, sizeof(h_StartDate) );
         memset( h_TsukaRyakusyo,            0x00, sizeof(h_TsukaRyakusyo) );
+        memset( h_IsBankFlg,                0x00, sizeof(h_IsBankFlg) );
         
         G_POSITION = __LINE__;
         EXEC SQL FETCH CUR_GAIKA INTO 
@@ -1159,7 +1180,8 @@ static int getGaika( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
             :h_AccntType       :h_ind_AccntType,      
             :h_AccntNo         :h_ind_AccntNo,        
             :h_StartDate       :h_ind_StartDate,      
-            :h_TsukaRyakusyo   :h_ind_TsukaRyakusyo  
+            :h_TsukaRyakusyo   :h_ind_TsukaRyakusyo,           
+            :h_IsBankFlg       :h_ind_IsBankFlg  
             ;
             
         if (sqlca.sqlcode == ORA_NOF){
@@ -1175,8 +1197,10 @@ static int getGaika( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
         strcpy(data[i]->accnt_no, h_AccntNo);
         strcpy(data[i]->shikumi_yokin, "");
         strcpy(data[i]->tsusho_kbn_id, "");
+        if(h_TsukaRyakusyo != NULL || strcmp( h_TsukaRyakusyo, "" ) != 0 ){
+	        len =Trim( h_TsukaRyakusyo );
+        }
         strcpy(data[i]->tsuka_ryakusyo, h_TsukaRyakusyo);
-        len =Trim( data[i]->tsuka_ryakusyo );
         strcpy(data[i]->start_date, h_StartDate);
         strcpy(data[i]->flg_toshin, "0");
         if( strcmp( data[i]->branch_id, h_TBMoushikomiten ) == 0){
@@ -1187,7 +1211,10 @@ static int getGaika( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
             strcpy(data[i]->flg_mousikomiten, "");
         }
         strcpy(data[i]->flg_not_ins, "");
+        strcpy(data[i]->flg_is_bank, h_IsBankFlg);
         data[i]->sort_kamoku = 1;
+        data[i]->flg_no_furikomisaki = 0;
+        
         i++;
         getCount++;
     }
@@ -1237,8 +1264,13 @@ static int getToshin( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
     strcpy(sqlcmd_local, "SELECT ");    
     strcat(sqlcmd_local, "TRIM(店番), ");
     strcat(sqlcmd_local, "科目ID, ");
-    strcat(sqlcmd_local, "口座番号 ");
-    strcat(sqlcmd_local, "口座開設年月日 ");
+    strcat(sqlcmd_local, "口座番号, ");
+    strcat(sqlcmd_local, "口座開設年月日, ");
+    strcat(sqlcmd_local, "CASE WHEN 店番 IN ( ");
+    strcat(sqlcmd_local, BANK_SHITEN);
+    strcat(sqlcmd_local, " ) THEN '");
+    strcat(sqlcmd_local, FLG_ON);
+    strcat(sqlcmd_local, "' ELSE '' END ");
     strcat(sqlcmd_local, "FROM ");
     strcat(sqlcmd_local, "TF_個別明細投信口座 ");
     strcat(sqlcmd_local, "WHERE ");
@@ -1314,13 +1346,15 @@ static int getToshin( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
         memset( h_AccntType,                0x00, sizeof(h_AccntType) );
         memset( h_AccntNo,                  0x00, sizeof(h_AccntNo) );
         memset( h_StartDate,                0x00, sizeof(h_StartDate) );
+        memset( h_IsBankFlg,                0x00, sizeof(h_IsBankFlg) );
         
         G_POSITION = __LINE__;
         EXEC SQL FETCH CUR_TOUSHIN INTO 
             :h_BranchId      :h_ind_BranchId,
             :h_AccntType     :h_ind_AccntType,      
             :h_AccntNo       :h_ind_AccntNo,       
-            :h_StartDate     :h_ind_StartDate      
+            :h_StartDate     :h_ind_StartDate,           
+            :h_IsBankFlg     :h_ind_IsBankFlg        
             ;
             
         if (sqlca.sqlcode == ORA_NOF){
@@ -1331,22 +1365,29 @@ static int getToshin( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
             return NODATA;
         }
         
-        strcpy(data[i]->branch_id, h_BranchId);
-        strcpy(data[i]->accnt_type, "9000");
-        strcpy(data[i]->accnt_no, h_AccntNo);
-        strcpy(data[i]->shikumi_yokin, "");
-        strcpy(data[i]->tsusho_kbn_id, "");
-        strcpy(data[i]->tsuka_ryakusyo, "JPY");
-        strcpy(data[i]->start_date, h_StartDate);
-        strcpy(data[i]->flg_toshin, "1");
-        if( strcmp( data[i]->branch_id, h_TBMoushikomiten ) == 0){
-            strcpy(data[i]->flg_mousikomiten, FLG_ON);
+        /* 生年月日と口座開設年月日から年齢を算出し、 
+        ** 20歳以上の場合は利用口座の登録対象のため、
+        */
+        if( chkDateOfBirth( h_StartDate ) == TRUE){
+            strcpy(data[i]->branch_id, h_BranchId);
+            strcpy(data[i]->accnt_type, "9000");
+            strcpy(data[i]->accnt_no, h_AccntNo);
+            strcpy(data[i]->shikumi_yokin, "");
+            strcpy(data[i]->tsusho_kbn_id, "");
+            strcpy(data[i]->tsuka_ryakusyo, "JPY");
+            strcpy(data[i]->start_date, h_StartDate);
+            strcpy(data[i]->flg_toshin, "1");
+            if( strcmp( data[i]->branch_id, h_TBMoushikomiten ) == 0){
+                strcpy(data[i]->flg_mousikomiten, FLG_ON);
+            }
+            else {
+                strcpy(data[i]->flg_mousikomiten, "");
+            }
+            strcpy(data[i]->flg_not_ins, "");
+            strcpy(data[i]->flg_is_bank, h_IsBankFlg);
+            data[i]->sort_kamoku = 1;
+            data[i]->flg_no_furikomisaki = 0;
         }
-        else {
-            strcpy(data[i]->flg_mousikomiten, "");
-        }
-        strcpy(data[i]->flg_not_ins, "");
-        data[i]->sort_kamoku = 1;
         
         i++;
         getCount++;
@@ -1444,53 +1485,82 @@ static void chgAccntType( KOZA_DATA **data, int count_all )
        }
 
        /* 定期預金の場合 */ 
-       else if( strncmp(h_ZentenFlg, FLG_ON, 1) == 0 ){
+       else if( strncmp(h_ZentenFlg, FLG_ON, 1) == 0 || strcmp( data[i]->flg_mousikomiten, FLG_ON ) == 0 ){
+           /* BANK支店の場合 */
+           if( strcmp( data[i]->flg_is_bank, FLG_ON ) == 0 ){
+               if( strcmp( data[i]->accnt_type, "2011" ) == 0 
+                   && strcmp( data[i]->shikumi_yokin, "0" ) == 0 ){
+                   strcpy(data[i]->accnt_type, "2030");
+                   data[i]->sort_kamoku = 2;
+               }
+               else if( strcmp( data[i]->accnt_type, "2012" ) == 0 ){
+                   strcpy(data[i]->accnt_type, "2030");
+                   data[i]->sort_kamoku = 2;
+               }
+               else if( strcmp( data[i]->accnt_type, "2021" ) == 0 ){
+                   strcpy(data[i]->accnt_type, "2030");
+                   data[i]->sort_kamoku = 2;
+               }
+               else if( strcmp( data[i]->accnt_type, "2098" ) == 0 ){
+                   strcpy(data[i]->accnt_type, "2030");
+                   data[i]->sort_kamoku = 2;
+               }
+               else if( strcmp( data[i]->accnt_type, "2000" ) == 0 
+                   && strcmp( data[i]->shikumi_yokin, "0" ) == 0 ){
+                   strcpy(data[i]->accnt_type, "2030");
+                   data[i]->sort_kamoku = 2;
+               }
 
-           if( strcmp( data[i]->accnt_type, "2011" ) == 0 
-               && strcmp( data[i]->shikumi_yokin, "0" ) == 0 
-               && ( strcmp( data[i]->tsusho_kbn_id, "1" ) == 0 )
-               ){
-               strcpy(data[i]->accnt_type, "2030");
-               data[i]->sort_kamoku = 2;
+               /* 登録対象外の場合 */ 
+               else {
+               
+                   /* 対象外フラグを立てる */
+                   strcpy(data[i]->flg_not_ins, FLG_ON);
+               }
            }
-           else if( strcmp( data[i]->accnt_type, "2012" ) == 0 
-               && ( strcmp( data[i]->tsusho_kbn_id, "1" ) == 0 )
-               ){
-               strcpy(data[i]->accnt_type, "2030");
-               data[i]->sort_kamoku = 2;
-           }
-           else if( strcmp( data[i]->accnt_type, "2021" ) == 0 
-               && ( strcmp( data[i]->tsusho_kbn_id, "1" ) == 0 )
-               ){
-               strcpy(data[i]->accnt_type, "2030");
-               data[i]->sort_kamoku = 2;
-           }
-           else if( strcmp( data[i]->accnt_type, "2098" ) == 0 
-               && ( strcmp( data[i]->tsusho_kbn_id, "1" ) == 0 )
-               ){
-               strcpy(data[i]->accnt_type, "2030");
-               data[i]->sort_kamoku = 2;
-           }
-           else if( strcmp( data[i]->accnt_type, "2000" ) == 0 
-               && strcmp( data[i]->shikumi_yokin, "0" ) == 0 
-               && ( strcmp( data[i]->tsusho_kbn_id, "1" ) == 0 )
-               ){
-               strcpy(data[i]->accnt_type, "2030");
-               data[i]->sort_kamoku = 2;
-           }
-
-           /* 登録対象外の場合 */ 
-           else {
            
-               /* 対象外フラグを立てる */
-               strcpy(data[i]->flg_not_ins, FLG_ON);
+           /* BANK支店以外の場合 */
+           else {
+               if( strcmp( data[i]->accnt_type, "2011" ) == 0 
+                   && strcmp( data[i]->shikumi_yokin, "0" ) == 0 
+                   && strcmp( data[i]->tsusho_kbn_id, "1" ) == 0 ){
+                   strcpy(data[i]->accnt_type, "2030");
+                   data[i]->sort_kamoku = 2;
+               }
+               else if( strcmp( data[i]->accnt_type, "2012" ) == 0 
+                   && strcmp( data[i]->tsusho_kbn_id, "1" ) == 0 ){
+                   strcpy(data[i]->accnt_type, "2030");
+                   data[i]->sort_kamoku = 2;
+               }
+               else if( strcmp( data[i]->accnt_type, "2021" ) == 0 
+                   && strcmp( data[i]->tsusho_kbn_id, "1" ) == 0 ){
+                   strcpy(data[i]->accnt_type, "2030");
+                   data[i]->sort_kamoku = 2;
+               }
+               else if( strcmp( data[i]->accnt_type, "2098" ) == 0 
+                   && strcmp( data[i]->tsusho_kbn_id, "1" ) == 0 ){
+                   strcpy(data[i]->accnt_type, "2030");
+                   data[i]->sort_kamoku = 2;
+               }
+               else if( strcmp( data[i]->accnt_type, "2000" ) == 0 
+                   && strcmp( data[i]->shikumi_yokin, "0" ) == 0 
+                   && strcmp( data[i]->tsusho_kbn_id, "1" ) == 0 ){
+                   strcpy(data[i]->accnt_type, "2030");
+                   data[i]->sort_kamoku = 2;
+               }
+
+               /* 登録対象外の場合 */ 
+               else {
+               
+                   /* 対象外フラグを立てる */
+                   strcpy(data[i]->flg_not_ins, FLG_ON);
+               }
            }
        }
        else if( strncmp(h_ZentenFlg, FLG_ON, 1) != 0 && strcmp( data[i]->flg_mousikomiten, FLG_ON ) != 0 ) {
 
            if( strcmp( data[i]->accnt_type, "2011" ) == 0 
-               && strcmp( data[i]->shikumi_yokin, "0" ) == 0 
-               ){
+               && strcmp( data[i]->shikumi_yokin, "0" ) == 0 ){
                strcpy(data[i]->accnt_type, "2030");
                data[i]->sort_kamoku = 2;
            }
@@ -1507,8 +1577,7 @@ static void chgAccntType( KOZA_DATA **data, int count_all )
                data[i]->sort_kamoku = 2;
            }
            else if( strcmp( data[i]->accnt_type, "2000" ) == 0 
-               && strcmp( data[i]->shikumi_yokin, "0" ) == 0 
-               ){
+               && strcmp( data[i]->shikumi_yokin, "0" ) == 0 ){
                strcpy(data[i]->accnt_type, "2030");
                data[i]->sort_kamoku = 2;
            }
@@ -1638,18 +1707,14 @@ int compareFlgToshin( const void *p, const void *q ) {
 
 /*****************************************************************************/
 /* Function Name:                                                            */
-/*          int chkBeforeIns( char *accnt_no, char *accnt_type               */
-/*             , char *branch_id, char *tsuka_ryakusyo, char *g_szDtlMsg )   */
+/*          int chkBeforeIns( KOZA_DATA *data, char *h_ContractorID          */
+/*                           , char *g_szDtlMsg )                            */
 /* Made by:                                                                  */
 /* Description : 口座登録処理前の各種チェックを行う                          */
 /* Arguments:                                                                */
 /*   Name               Type/Length  I/O    Content                          */
 /* -------------------  -----------  ---  ------------------------------     */
-/* accnt_no             char*        I/O  口座番号                           */
-/* accnt_type           char*        I/O  科目ID                             */
-/* branch_id            char*        I/O  店番                               */
-/* tsuka_ryakusyo       char*        I/O  通貨略称                           */
-/* no_furikomisaki_flg  char*        I/O  振込先未登録フラグ                 */
+/* data                 KOZA_DATA*   I/O  構造体ポインタ                     */
 /* g_szDtlMsg           char*        I/O  事象詳細文字列                     */
 /*                                                                           */
 /* Files :                                                                   */
@@ -1668,8 +1733,7 @@ int compareFlgToshin( const void *p, const void *q ) {
 /* Control Flow:                                                             */
 /*                                                                           */
 /*****************************************************************************/
-static int chkBeforeIns( char *accnt_no, char *accnt_type, char *branch_id
-                  , char *tsuka_ryakusyo, int no_furikomisaki_flg, char *g_szDtlMsg )
+static int chkBeforeIns( KOZA_DATA *data, char *h_ContractorID, char *g_szDtlMsg )
 {
 
     int rc;
@@ -1682,10 +1746,10 @@ static int chkBeforeIns( char *accnt_no, char *accnt_type, char *branch_id
     
     /* 利用口座の存在チェック */
     h_TB_COUNT = 0;      /* テーブルカウント */
-    strcpy(h_AccntNo, accnt_no);                 /* 口座番号 */
-    strcpy(h_AccntType, accnt_type);             /* 科目ID   */
-    strcpy(h_BranchId, branch_id);               /* 店番     */
-    strcpy(h_TsukaRyakusyo, tsuka_ryakusyo);     /* 通貨ID   */
+    strcpy(h_AccntNo, data->accnt_no);                 /* 口座番号 */
+    strcpy(h_AccntType, data->accnt_type);             /* 科目ID   */
+    strcpy(h_BranchId, data->branch_id);               /* 店番     */
+    strcpy(h_TsukaRyakusyo, data->tsuka_ryakusyo);     /* 通貨ID   */
     
     G_POSITION = __LINE__;
 
@@ -1708,9 +1772,9 @@ static int chkBeforeIns( char *accnt_no, char *accnt_type, char *branch_id
     else if (h_TB_COUNT >= 1){
         return(ERROR);
     }
-        
+    
     /* 投信口座の場合 */
-    if( strcmp( accnt_type, "9000" ) == 0 ){
+    if( strcmp( data->accnt_type, "9000" ) == 0 ){
         
         /* 既に投信口座が登録されているかチェック */
         h_TB_COUNT = 0;      /* テーブルカウント */
@@ -1739,12 +1803,12 @@ static int chkBeforeIns( char *accnt_no, char *accnt_type, char *branch_id
         }
         
         /* 普通預金が利用口座に登録済かチェック */
-        if ( (rc = chkToshinKozaState( accnt_no, no_furikomisaki_flg, g_szDtlMsg )) != NORMAL ){
+        if ( (rc = chkToshinKozaState( data, g_szDtlMsg )) != NORMAL ){
             return(ERROR);
         }
         
         /* 振込先預金を新規登録する場合は、最大登録件数が少なくなる */
-        if( no_furikomisaki_flg = 1 ){
+        if( data->flg_no_furikomisaki == 1 ){
             max_koza_count--;
         
         }
@@ -1780,15 +1844,13 @@ static int chkBeforeIns( char *accnt_no, char *accnt_type, char *branch_id
 
 /*****************************************************************************/
 /* Function Name:                                                            */
-/*          int chkToshinKozaState( char *accnt_no                           */
-/*                       , int no_furikomisaki_flg, char *g_szDtlMsg )       */
+/*          int chkToshinKozaState( KOZA_DATA *data, char *g_szDtlMsg )      */
 /* Made by:                                                                  */
 /* Description : 投信口座のチェックを行う                                    */
 /* Arguments:                                                                */
 /*   Name               Type/Length  I/O    Content                          */
 /* -------------------  -----------  ---  ------------------------------     */
-/* accnt_no             char*        I/O  口座番号                           */
-/* no_furikomisaki_flg  char*        I/O  振込先未登録フラグ                 */
+/* data                 KOZA_DATA*   I/O  構造体ポインタ                     */
 /* g_szDtlMsg           char*        I/O  事象詳細文字列                     */
 /*                                                                           */
 /* Files :                                                                   */
@@ -1807,7 +1869,7 @@ static int chkBeforeIns( char *accnt_no, char *accnt_type, char *branch_id
 /* Control Flow:                                                             */
 /*                                                                           */
 /*****************************************************************************/
-static int chkToshinKozaState( char *accnt_no, int no_furikomisaki_flg, char *g_szDtlMsg )
+static int chkToshinKozaState( KOZA_DATA *data, char *g_szDtlMsg )
 {
     /*
     **  TF_個別明細投信口座テーブルから情報を取得する。
@@ -1819,7 +1881,7 @@ static int chkToshinKozaState( char *accnt_no, int no_furikomisaki_flg, char *g_
     memset( h_FurikomiShitenID,          0x00, sizeof(h_FurikomiShitenID) );
     memset( h_AccntNoTsn,                0x00, sizeof(h_AccntNoTsn) );
     
-    strcpy(h_AccntNo, accnt_no);                      /* 口座番号       */
+    strcpy(h_AccntNo, data->accnt_no);                /* 口座番号       */
     strcpy(h_AccntType, KAMOKU_FUTSU);                /* 科目ID         */
     strcpy(h_AccntTypeTsn, KAMOKU_FUTSU_TOSHIN);      /* 科目ID（投信） */
     
@@ -1867,7 +1929,7 @@ static int chkToshinKozaState( char *accnt_no, int no_furikomisaki_flg, char *g_
     }
     
     if( h_TB_COUNT == 0 ) {
-        no_furikomisaki_flg = 1;
+        data->flg_no_furikomisaki = 1;
     }    
     
     return(NOMAL);
@@ -1876,14 +1938,13 @@ static int chkToshinKozaState( char *accnt_no, int no_furikomisaki_flg, char *g_
 /*****************************************************************************/
 /* Function Name:                                                            */
 /*          int insKoza( KOZA_DATA *data, char *h_ContractorID               */
-/*                   , int no_furikomisaki_flg, char *g_szDtlMsg )           */
+/*                       , char *g_szDtlMsg )                                */
 /* Made by:                                                                  */
 /* Description : TFB_テレバン契約口座登録処理                                */
 /* Arguments:                                                                */
 /*   Name               Type/Length  I/O    Content                          */
 /* -------------------  -----------  ---  ------------------------------     */
 /* data                 KOZA_DATA*   I/O  構造体配列                         */
-/* no_furikomisaki_flg  char*        I/O  振込先未登録フラグ                 */
 /* g_szDtlMsg           char*        I/O  事象詳細文字列                     */
 /*                                                                           */
 /* Files :                                                                   */
@@ -1902,7 +1963,7 @@ static int chkToshinKozaState( char *accnt_no, int no_furikomisaki_flg, char *g_
 /* Control Flow:                                                             */
 /*                                                                           */
 /*****************************************************************************/
-static int insKoza( KOZA_DATA *data, char *h_ContractorID, int no_furikomisaki_flg, char *g_szDtlMsg )
+static int insKoza( KOZA_DATA *data, char *h_ContractorID, char *g_szDtlMsg )
 {
 
     /* TFB_テレバン契約口座登録処理 */
@@ -1976,7 +2037,7 @@ static int insKoza( KOZA_DATA *data, char *h_ContractorID, int no_furikomisaki_f
     /* 投信口座登録の場合は普通預金口座の投信口座区分を更新する */
     if ( strcmp( h_ins_AccntType, "9000" ) == 0 ){
         
-        if( (rc = updFurikomiSaki( data->accnt_no, no_furikomisaki_flg, g_szDtlMsg )) != NORMAL ){
+        if( (rc = updFurikomiSaki( data, g_szDtlMsg )) != NORMAL ){
             return ERROR;
         }
     }
@@ -1986,15 +2047,13 @@ static int insKoza( KOZA_DATA *data, char *h_ContractorID, int no_furikomisaki_f
 
 /*****************************************************************************/
 /* Function Name:                                                            */
-/*          int updFurikomiSaki( char *accnt_no                              */
-/*                   , int no_furikomisaki_flg, char *g_szDtlMsg )           */
+/*          int updFurikomiSaki( KOZA_DATA *data, char *g_szDtlMsg )         */
 /* Made by:                                                                  */
 /* Description : 投信口座区分の更新を行う                                    */
 /* Arguments:                                                                */
 /*   Name               Type/Length  I/O    Content                          */
 /* -------------------  -----------  ---  ------------------------------     */
-/* accnt_no             char*        I/O  口座番号                           */
-/* no_furikomisaki_flg  char*        I/O  振込先未登録フラグ                 */
+/* data                 KOZA_DATA*   I/O  構造体配列                         */
 /* g_szDtlMsg           char*        I/O  事象詳細文字列                     */
 /*                                                                           */
 /* Files :                                                                   */
@@ -2013,7 +2072,7 @@ static int insKoza( KOZA_DATA *data, char *h_ContractorID, int no_furikomisaki_f
 /* Control Flow:                                                             */
 /*                                                                           */
 /*****************************************************************************/
-static int updFurikomiSaki( char *accnt_no, int no_furikomisaki_flg, char *g_szDtlMsg )
+static int updFurikomiSaki( KOZA_DATA *data, char *g_szDtlMsg )
 {
     /*
     **  TF_個別明細投信口座テーブルから情報を取得する。
@@ -2024,10 +2083,14 @@ static int updFurikomiSaki( char *accnt_no, int no_furikomisaki_flg, char *g_szD
     memset( h_AccntTypeTsn,              0x00, sizeof(h_AccntTypeTsn) );
     memset( h_FurikomiShitenID,          0x00, sizeof(h_FurikomiShitenID) );
     memset( h_AccntNoTsn,                0x00, sizeof(h_AccntNoTsn) );
+    memset( h_ins_ContractorID,          0x00, sizeof(h_ins_ContractorID) );
+    memset( h_ins_CIFNO,                 0x00, sizeof(h_ins_CIFNO) );
     
-    strcpy(h_AccntNo, accnt_no);                      /* 口座番号       */
+    strcpy(h_AccntNo, data->accnt_no);                /* 口座番号       */
     strcpy(h_AccntType, KAMOKU_FUTSU);                /* 科目ID         */
     strcpy(h_AccntTypeTsn, KAMOKU_FUTSU_TOSHIN);      /* 科目ID（投信） */
+    strcpy(h_ins_ContractorID, h_ContractorID);
+    strcpy(h_ins_CIFNO, h_CIFNO);
     
     G_POSITION = __LINE__;
     EXEC SQL SELECT 振込支店ID, 振込口座
@@ -2049,7 +2112,7 @@ static int updFurikomiSaki( char *accnt_no, int no_furikomisaki_flg, char *g_szD
         return(ERROR);
     }
     
-    if( no_furikomisaki_flg = 1 ){
+    if( data->flg_no_furikomisaki == 1 ){
         /*  データINSERT    */
         G_POSITION = __LINE__;
         EXEC SQL INSERT INTO TFB_テレバン契約口座
@@ -2074,7 +2137,7 @@ static int updFurikomiSaki( char *accnt_no, int no_furikomisaki_flg, char *g_szD
         ) VALUES (
             :h_ins_ContractorID,
             NULL,
-            :h_ins_BranchId,
+            :h_FurikomiShitenID,
             :h_ins_CIFNO,
             :h_AccntType,
             '00',
