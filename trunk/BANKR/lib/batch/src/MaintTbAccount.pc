@@ -25,6 +25,9 @@
 /* Mod   yy/mm/dd   Coder           Comment                                 */
 /*-----+----------+-------------+-------------------------------------------*/
 /* %00 | 20/06/29 | Y.Maruyama  | First Edition.                            */
+/* %01 | 20/12/27 | S.Ishihara  | 定期性・外貨預金口座に枝番号の条件追加    */
+/* %02 | 21/01/06 | A.Miyamoto  | 投信口座登録対象のカウント方法を修正      */
+/*                              | テレバン契約属性の承認日等更新処理を追加  */
 /*==========================================================================*/
 /*---------------------------------------------------------------------------*/
 /* Standard include specification                                            */
@@ -105,7 +108,9 @@ int  i;
 int  j;
 
 char    process_name[56];
-
+/* %02 ADD START */
+char    keiyakuZokuseiUpdFlg[2];                     /* テレバン契約属性更新済みフラグ */
+/* %02 ADD END */
 
 /*---------------------------------------------------------------------------*/
 /* Host Variable                                                             */
@@ -201,6 +206,9 @@ static int chkBeforeIns(  KOZA_DATA *data, char *h_ContractorID, char *g_szDtlMs
 static int chkToshinKozaState( KOZA_DATA *data, char *g_szDtlMsg );
 static int insKoza( KOZA_DATA *data, char *h_ContractorID, char *g_szDtlMsg );
 static int updFurikomiSaki( KOZA_DATA *data, char *g_szDtlMsg );
+/* %02 ADD START */
+static int updKeiyakuZokusei( char *g_szDtlMsg );
+/* %02 ADD END */
 static int chkDateOfBirth( char *start_date );
 static int Trim(char *s);
 
@@ -371,6 +379,11 @@ int main( int argc, char *argv[] )
         
         count_line = 0;
 
+        /* %02 ADD START */
+        memset(keiyakuZokuseiUpdFlg, 0x00,sizeof(keiyakuZokuseiUpdFlg));
+        strcpy(keiyakuZokuseiUpdFlg, "");
+        /* %02 ADD END */
+        
         G_POSITION = __LINE__;
         EXEC SQL FETCH CUR_KOKYAKU INTO
             :h_CIFNO              :h_ind_CIFNO,                /* CIFNO */
@@ -762,6 +775,9 @@ static int getKoteisei( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
     strcat(sqlcmd_local, "AND 店番 NOT IN ( ");
     strcat(sqlcmd_local, TENBAN_CC_HONNBU);
     strcat(sqlcmd_local, " ) ");
+    /* %01 ADD START */
+    strcat(sqlcmd_local, "AND 枝番号 = '0000000' ");
+    /* %01 ADD END */
     if( strncmp(h_ZentenFlg, FLG_ON, 1) != 0 ){
         strcat(sqlcmd_local, "AND ( 店番 = ");
         strcat(sqlcmd_local, "'");
@@ -1104,6 +1120,9 @@ static int getGaika( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
     strcat(sqlcmd_local, "AND 店番 NOT IN ( ");
     strcat(sqlcmd_local, TENBAN_CC_HONNBU);
     strcat(sqlcmd_local, " ) ");
+    /* %01 ADD START */
+    strcat(sqlcmd_local, "AND 枝番号 = '00000' ");
+    /* %01 ADD END */
 
     strcat(sqlcmd_local, "AND ( 科目ID = '711' ");
     strcat(sqlcmd_local, "OR ( 科目ID = '702' ");
@@ -1387,10 +1406,15 @@ static int getToshin( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
             strcpy(data[i]->flg_is_bank, h_IsBankFlg);
             data[i]->sort_kamoku = 1;
             data[i]->flg_no_furikomisaki = 0;
+            /* %02 ADD START */
+            i++;
+            getCount++;
+            /* %02 ADD END */
         }
-        
-        i++;
-        getCount++;
+        /* %02 DEL START */
+        /* i++; */
+        /* getCount++; */
+        /* %02 DEL END */
     }
     
     G_POSITION = __LINE__;
@@ -2042,6 +2066,17 @@ static int insKoza( KOZA_DATA *data, char *h_ContractorID, char *g_szDtlMsg )
         }
     }
     
+    /* %02 ADD START */
+    /* TFB_テレバン契約属性が未更新の場合は更新する */
+    if( strcmp( keiyakuZokuseiUpdFlg, FLG_ON ) != 0 ){
+        if( (rc = updKeiyakuZokusei( g_szDtlMsg )) == NORMAL ){
+            strcpy(keiyakuZokuseiUpdFlg, FLG_ON);
+        } else {
+            return ERROR;
+        }
+    }
+    /* %02 ADD END */
+    
     return NOMAL;
 }
 
@@ -2185,6 +2220,61 @@ static int updFurikomiSaki( KOZA_DATA *data, char *g_szDtlMsg )
     
     return(NOMAL);
 }
+
+/* %02 ADD START */
+/*****************************************************************************/
+/* Function Name:                                                            */
+/*          int updKeiyakuZokusei( char *g_szDtlMsg )                        */
+/* Made by:                                                                  */
+/* Description : TFB_テレバン契約属性テーブルの更新を行う                    */
+/* Arguments:                                                                */
+/*   Name               Type/Length  I/O    Content                          */
+/* -------------------  -----------  ---  ------------------------------     */
+/* g_szDtlMsg           char*        I/O  事象詳細文字列                     */
+/*                                                                           */
+/* Files :                                                                   */
+/*    None                                                                   */
+/* Tables:                                                                   */
+/*    None                                                                   */
+/* Return Code:                                                              */
+/*    NORMAL       : 正常終了                                                */
+/*    ERROR        : 挿入エラー                                              */
+/*                                                                           */
+/*****************************************************************************/
+/* Process Description:                                                      */
+/*                                                                           */
+/* Considerations:                                                           */
+/*                                                                           */
+/* Control Flow:                                                             */
+/*                                                                           */
+/*****************************************************************************/
+static int updKeiyakuZokusei( char *g_szDtlMsg )
+{
+    /*
+    **  TFB_テレバン契約属性テーブルの更新を行う。
+    */
+    /*  データUPDATE    */
+    G_POSITION = __LINE__;
+    EXEC SQL UPDATE TFB_テレバン契約属性 
+        SET 承認日 = SYSDATE
+            ,承認者 = 'SPV'
+            ,処理区分 = '1'
+            ,最終更新日 = SYSDATE
+            ,最終更新者 = 'SPV'
+         WHERE 契約者番号 = :h_ContractorID
+        ;
+
+    if ( sqlca.sqlcode < 0 ){
+        sprintf( g_szDtlMsg,
+                 "TFB_テレバン契約属性のUPDATEに失敗しました。(sqlca.sqlcode=%d)",
+                 sqlca.sqlcode );
+        send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        send_err ( m$sql_statment, sqlca.sqlcode, "UPDATE TFB_テレバン契約属性", NULL, NULL, G_STATION);
+        return ERROR;
+    }
+    return(NOMAL);
+}
+/* %02 ADD END */
 
 /*****************************************************************************/
 /* Function Name:                                                            */
