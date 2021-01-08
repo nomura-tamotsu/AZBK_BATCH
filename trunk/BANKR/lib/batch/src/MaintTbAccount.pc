@@ -28,6 +28,7 @@
 /* %01 | 20/12/27 | S.Ishihara  | 定期性・外貨預金口座に枝番号の条件追加    */
 /* %02 | 21/01/06 | A.Miyamoto  | 投信口座登録対象のカウント方法を修正      */
 /*                              | テレバン契約属性の承認日等更新処理を追加  */
+/*                              | 口座情報を保持する変数のメモリ初期化修正  */
 /*==========================================================================*/
 /*---------------------------------------------------------------------------*/
 /* Standard include specification                                            */
@@ -368,7 +369,10 @@ int main( int argc, char *argv[] )
     while( 1 ) {
         dData = NULL;
         pData = NULL;
-        memset( &dData,                          0x00, sizeof(KOZA_DATA) );
+        /* %02 MOD START */
+        /* memset( &dData,                          0x00, sizeof(KOZA_DATA) ); */
+        memset( &dData,                          0x00, sizeof(KOZA_DATA*) );
+        /* %02 MOD END */
         memset( &pData,                          0x00, sizeof(KOZA_DATA*) );
         memset( h_CIFNO,                         0x00, sizeof(h_CIFNO) );
         memset( h_TBContract,                    0x00, sizeof(h_TBContract) );
@@ -431,7 +435,11 @@ int main( int argc, char *argv[] )
         /* 配列のメモリを確保する */
         dData = (KOZA_DATA*)malloc(MAX_DATA * sizeof(KOZA_DATA));
         pData = (KOZA_DATA**)malloc(MAX_DATA * sizeof(KOZA_DATA*));
+
         for (i = 0; i < MAX_DATA; i++){
+            /* %02 ADD START */
+            memset( &dData[i],                          0x00, sizeof(KOZA_DATA) );
+            /* %02 ADD END */
             pData[i] = &dData[i];
         }
 
