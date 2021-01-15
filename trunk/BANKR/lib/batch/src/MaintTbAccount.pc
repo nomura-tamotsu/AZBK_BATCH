@@ -29,6 +29,7 @@
 /* %02 | 21/01/06 | A.Miyamoto  | 投信口座登録対象のカウント方法を修正      */
 /*                              | テレバン契約属性の承認日等更新処理を追加  */
 /*                              | 口座情報を保持する変数のメモリ初期化修正  */
+/* %03 | 21/01/15 | K.Takeichi  | SQLをバインド変数を使用するよう修正       */
 /*==========================================================================*/
 /*---------------------------------------------------------------------------*/
 /* Standard include specification                                            */
@@ -776,10 +777,14 @@ static int getKoteisei( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
     strcat(sqlcmd_local, "FROM ");
     strcat(sqlcmd_local, "TF_個別明細固定性預金 ");
     strcat(sqlcmd_local, "WHERE ");
-    strcat(sqlcmd_local, "CIFNO = ");
-    strcat(sqlcmd_local, "'");
-    strcat(sqlcmd_local, h_CIFNO);    
-    strcat(sqlcmd_local, "' "); 
+    /* %03 MOD START */
+    //バインド変数対応
+    strcat(sqlcmd_local, "CIFNO = :h_CIFNO ");
+    //strcat(sqlcmd_local, "CIFNO = ");
+    //strcat(sqlcmd_local, "'");
+    //strcat(sqlcmd_local, h_CIFNO);    
+    //strcat(sqlcmd_local, "' "); 
+    /* %03 MOD END */
     strcat(sqlcmd_local, "AND 店番 NOT IN ( ");
     strcat(sqlcmd_local, TENBAN_CC_HONNBU);
     strcat(sqlcmd_local, " ) ");
@@ -787,10 +792,14 @@ static int getKoteisei( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
     strcat(sqlcmd_local, "AND 枝番号 = '0000000' ");
     /* %01 ADD END */
     if( strncmp(h_ZentenFlg, FLG_ON, 1) != 0 ){
-        strcat(sqlcmd_local, "AND ( 店番 = ");
-        strcat(sqlcmd_local, "'");
-        strcat(sqlcmd_local, h_TBMoushikomiten);    
-        strcat(sqlcmd_local, "' "); 
+        /* %03 MOD START */
+        //バインド変数対応
+        strcat(sqlcmd_local, "AND ( 店番 = :h_TBMoushikomiten ");
+        //strcat(sqlcmd_local, "AND ( 店番 = ");
+        //strcat(sqlcmd_local, "'");
+        //strcat(sqlcmd_local, h_TBMoushikomiten);    
+        //strcat(sqlcmd_local, "' "); 
+        /* %03 MOD END */
         strcat(sqlcmd_local, "OR ( 店番 IN ( ");
         strcat(sqlcmd_local, BANK_SHITEN);
         strcat(sqlcmd_local, " ) ");
@@ -824,8 +833,15 @@ static int getKoteisei( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
     }
                 
     G_POSITION = __LINE__;
-    EXEC SQL OPEN CUR_KOTEISEI;
-        
+    /* %03 MOD START */
+    //バインド変数対応
+    //EXEC SQL OPEN CUR_KOTEISEI;
+    if( strncmp(h_ZentenFlg, FLG_ON, 1) != 0 ){
+        EXEC SQL OPEN CUR_KOTEISEI USING :h_CIFNO, :h_TBMoushikomiten;
+    } else {
+        EXEC SQL OPEN CUR_KOTEISEI USING :h_CIFNO;
+    }
+
     if( sqlca.sqlcode < 0 ) {
         sprintf( g_szDtlMsg,
                 "カーソル(CUR_KOTEISEI)オープン・エラー(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
@@ -948,18 +964,26 @@ static int getRyudosei( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
     strcat(sqlcmd_local, "FROM ");
     strcat(sqlcmd_local, "TF_個別明細流動性預金 ");
     strcat(sqlcmd_local, "WHERE ");
-    strcat(sqlcmd_local, "CIFNO = ");
-    strcat(sqlcmd_local, "'");
-    strcat(sqlcmd_local, h_CIFNO);    
-    strcat(sqlcmd_local, "' "); 
+    /* %03 MOD START */
+    //バインド変数対応
+    strcat(sqlcmd_local, "CIFNO = :h_CIFNO ");
+    /* %03 MOD END */
+    //strcat(sqlcmd_local, "CIFNO = ");
+    //strcat(sqlcmd_local, "'");
+    //strcat(sqlcmd_local, h_CIFNO);    
+    //strcat(sqlcmd_local, "' "); 
     strcat(sqlcmd_local, "AND 店番 NOT IN ( ");
     strcat(sqlcmd_local, TENBAN_CC_HONNBU);
     strcat(sqlcmd_local, " ) ");
     if( strncmp(h_ZentenFlg, FLG_ON, 1) != 0 ){
-        strcat(sqlcmd_local, "AND ( 店番 = ");
-        strcat(sqlcmd_local, "'");
-        strcat(sqlcmd_local, h_TBMoushikomiten);    
-        strcat(sqlcmd_local, "' "); 
+        /* %03 MOD START */
+        //バインド変数対応
+        strcat(sqlcmd_local, "AND ( 店番 = :h_TBMoushikomiten ");
+        //strcat(sqlcmd_local, "AND ( 店番 = ");
+        //strcat(sqlcmd_local, "'");
+        //strcat(sqlcmd_local, h_TBMoushikomiten);    
+        //strcat(sqlcmd_local, "' "); 
+        /* %03 MOD END */
         strcat(sqlcmd_local, "OR ( 店番 IN ( ");
         strcat(sqlcmd_local,     BANK_SHITEN);
         strcat(sqlcmd_local,     " ) ");
@@ -993,7 +1017,15 @@ static int getRyudosei( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
     }
 
     G_POSITION = __LINE__;
-    EXEC SQL OPEN CUR_RYUDOSEI;
+    /* %03 MOD START */
+    //バインド変数対応
+    //EXEC SQL OPEN CUR_RYUDOSEI;
+    if( strncmp(h_ZentenFlg, FLG_ON, 1) != 0 ){
+        EXEC SQL OPEN CUR_RYUDOSEI USING :h_CIFNO, :h_TBMoushikomiten;
+    } else {
+        EXEC SQL OPEN CUR_RYUDOSEI USING :h_CIFNO;
+    }
+
     if( sqlca.sqlcode < 0 ) {
         sprintf( g_szDtlMsg,
                 "カーソル(CUR_RYUDOSEI)オープン・エラー(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
@@ -1121,10 +1153,14 @@ static int getGaika( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
     strcat(sqlcmd_local, "ON ");
     strcat(sqlcmd_local, "TF_個別明細外貨預金.通貨ID = TM_通貨.通貨ID ");
     strcat(sqlcmd_local, "WHERE ");
-    strcat(sqlcmd_local, "CIFNO = ");
-    strcat(sqlcmd_local, "'");
-    strcat(sqlcmd_local, h_CIFNO);    
-    strcat(sqlcmd_local, "' "); 
+    /* %03 MOD START */
+    //バインド変数対応
+    strcat(sqlcmd_local, "CIFNO = :h_CIFNO ");
+    //strcat(sqlcmd_local, "CIFNO = ");
+    //strcat(sqlcmd_local, "'");
+    //strcat(sqlcmd_local, h_CIFNO);    
+    //strcat(sqlcmd_local, "' ");
+    /* %03 MOD END */ 
     strcat(sqlcmd_local, "AND 店番 NOT IN ( ");
     strcat(sqlcmd_local, TENBAN_CC_HONNBU);
     strcat(sqlcmd_local, " ) ");
@@ -1144,10 +1180,14 @@ static int getGaika( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
     strcat(sqlcmd_local, ") ) ) ");
     
     if( strncmp(h_ZentenFlg, FLG_ON, 1) != 0 ){
-        strcat(sqlcmd_local, "AND 店番 = ");
-        strcat(sqlcmd_local, "'");
-        strcat(sqlcmd_local, h_TBMoushikomiten);    
-        strcat(sqlcmd_local, "' "); 
+        /* %03 MOD START */
+        //バインド変数対応
+        strcat(sqlcmd_local, "AND 店番 = :h_TBMoushikomiten ");
+        //strcat(sqlcmd_local, "AND 店番 = ");
+        //strcat(sqlcmd_local, "'");
+        //strcat(sqlcmd_local, h_TBMoushikomiten);    
+        //strcat(sqlcmd_local, "' "); 
+        /* %03 MOD END */
     }
     
     strcat(sqlcmd_local, "ORDER  BY 登録年月日");
@@ -1176,7 +1216,16 @@ static int getGaika( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
     }
 
     G_POSITION = __LINE__;
-    EXEC SQL OPEN CUR_GAIKA;
+    /* %03 MOD START */
+    //バインド変数対応
+    //EXEC SQL OPEN CUR_GAIKA;
+    if( strncmp(h_ZentenFlg, FLG_ON, 1) != 0 ){
+        EXEC SQL OPEN CUR_GAIKA USING :h_CIFNO, :h_TBMoushikomiten;
+    } else {
+        EXEC SQL OPEN CUR_GAIKA USING :h_CIFNO;
+    }
+    /* %03 MOD END */
+
     if( sqlca.sqlcode < 0 ) {
         sprintf( g_szDtlMsg,
                 "カーソル(CUR_GAIKA)オープン・エラー(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
@@ -1301,10 +1350,14 @@ static int getToshin( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
     strcat(sqlcmd_local, "FROM ");
     strcat(sqlcmd_local, "TF_個別明細投信口座 ");
     strcat(sqlcmd_local, "WHERE ");
-    strcat(sqlcmd_local, "CIFNO = ");
-    strcat(sqlcmd_local, "'");
-    strcat(sqlcmd_local, h_CIFNO);    
-    strcat(sqlcmd_local, "' "); 
+    /* %03 MOD START */
+    //バインド変数対応
+    strcat(sqlcmd_local, "CIFNO = :h_CIFNO ");
+    //strcat(sqlcmd_local, "CIFNO = ");
+    //strcat(sqlcmd_local, "'");
+    //strcat(sqlcmd_local, h_CIFNO);    
+    //strcat(sqlcmd_local, "' "); 
+    /* %03 MOD END */
     strcat(sqlcmd_local, "AND 店番 NOT IN ( ");
     strcat(sqlcmd_local, TENBAN_CC_HONNBU);
     strcat(sqlcmd_local, " ) ");
@@ -1312,10 +1365,14 @@ static int getToshin( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
     strcat(sqlcmd_local, BANK_ID_JIGYOU);
     strcat(sqlcmd_local, " ");
     if( strncmp(h_ZentenFlg, FLG_ON, 1) != 0 ){
-        strcat(sqlcmd_local, "AND ( 店番 = ");
-        strcat(sqlcmd_local, "'");
-        strcat(sqlcmd_local, h_TBMoushikomiten);    
-        strcat(sqlcmd_local, "' "); 
+        /* %03 MOD START */
+        //バインド変数対応
+        strcat(sqlcmd_local, "AND ( 店番 = :h_TBMoushikomiten ");
+        //strcat(sqlcmd_local, "AND ( 店番 = ");
+        //strcat(sqlcmd_local, "'");
+        //strcat(sqlcmd_local, h_TBMoushikomiten);    
+        //strcat(sqlcmd_local, "' "); 
+        /* %03 MOD END */
         strcat(sqlcmd_local, "OR ( 店番 IN ( ");
         strcat(sqlcmd_local, BANK_SHITEN);
         strcat(sqlcmd_local, " ) ");
@@ -1351,7 +1408,16 @@ static int getToshin( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
     }
 
     G_POSITION = __LINE__;
-    EXEC SQL OPEN CUR_TOUSHIN;
+    /* %03 MOD START */
+    //バインド変数対応
+    //EXEC SQL OPEN CUR_TOUSHIN;
+    if( strncmp(h_ZentenFlg, FLG_ON, 1) != 0 ){
+        EXEC SQL OPEN CUR_TOUSHIN USING :h_CIFNO, :h_TBMoushikomiten;
+    } else {
+        EXEC SQL OPEN CUR_TOUSHIN USING :h_CIFNO;
+    }
+    /* %03 MOD START */
+
     if( sqlca.sqlcode < 0 ) {
         sprintf( g_szDtlMsg,
                 "カーソル(CUR_TOUSHIN)オープン・エラー(sqlca.sqlcode=%d) 契約者番号:%s、CIFNO:%s",
