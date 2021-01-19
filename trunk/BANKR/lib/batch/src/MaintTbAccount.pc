@@ -30,6 +30,11 @@
 /*                              | テレバン契約属性の承認日等更新処理を追加  */
 /*                              | 口座情報を保持する変数のメモリ初期化修正  */
 /* %03 | 21/01/15 | K.Takeichi  | SQLをバインド変数を使用するよう修正       */
+/* %04 | 21/01/18 | A.Miyamoto  | 51件以上の口座情報取得時のメッセージ追加  */
+/*                              | 投信の抽出条件変更                        */
+/*                              | (口座開設日2020/12/20以降のBANK支店を抽出)*/
+/*                              | 口座登録可能件数を20件から21件に修正      */
+/*                              | テレバン契約口座の存在チェック条件を修正  */
 /*==========================================================================*/
 /*---------------------------------------------------------------------------*/
 /* Standard include specification                                            */
@@ -90,7 +95,10 @@ typedef struct _KOZA_DATA {
 #define BANK_ID_JIGYOU          "'0398'"
 #define KAMOKU_FUTSU_TOSHIN     "1"
 #define MAX_DATA                50
-#define MAX_KOZA_COUNT          20
+/* %04 MOD START */
+/* #define MAX_KOZA_COUNT          20 */
+#define MAX_KOZA_COUNT          21
+/* %04 MOD END */
 #define KAMOKU_FUTSU            "2050"
 
 /*---------------------------------------------------------------------------*/
@@ -113,6 +121,9 @@ char    process_name[56];
 /* %02 ADD START */
 char    keiyakuZokuseiUpdFlg[2];                     /* テレバン契約属性更新済みフラグ */
 /* %02 ADD END */
+/* %04 ADD START */
+char    accntNoMaxDataFlg[2];                        /* 口座取得上限超過フラグ */
+/* %04 ADD END */
 
 /*---------------------------------------------------------------------------*/
 /* Host Variable                                                             */
@@ -388,6 +399,10 @@ int main( int argc, char *argv[] )
         memset(keiyakuZokuseiUpdFlg, 0x00,sizeof(keiyakuZokuseiUpdFlg));
         strcpy(keiyakuZokuseiUpdFlg, "");
         /* %02 ADD END */
+        /* %04 ADD START */
+        memset(accntNoMaxDataFlg, 0x00,sizeof(accntNoMaxDataFlg));
+        strcpy(accntNoMaxDataFlg, "");
+        /* %04 ADD END */
         
         G_POSITION = __LINE__;
         EXEC SQL FETCH CUR_KOKYAKU INTO
@@ -485,6 +500,15 @@ int main( int argc, char *argv[] )
         }
         count_line += rc;
                 
+        /* %04 ADD START */
+        /* 口座情報取得件数が51件以上ある場合はメッセージを出力する */
+        if( strcmp( accntNoMaxDataFlg, FLG_ON ) == 0 ){
+            sprintf( g_szDtlMsg,
+                "【翌営業日連絡】対象顧客の口座取得上限数を超過しました。店：%s、CIFNO：%s", h_TBMoushikomiten, h_CIFNO);
+            send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+        }
+        /* %04 ADD END */
+        
         /* ------------------------------------------ */
         /* 科目IDを変換する                           */
         /* ------------------------------------------ */        
@@ -855,6 +879,9 @@ static int getKoteisei( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
     {
         /* 配列の最大件数を超えた場合は処理を終了する */
         if( i >= MAX_DATA){
+            /* %04 ADD START */
+            strcpy(accntNoMaxDataFlg, FLG_ON);
+            /* %04 ADD END */
             break;
         }
 
@@ -1040,6 +1067,9 @@ static int getRyudosei( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
     {
         /* 配列の最大件数を超えた場合は処理を終了する */
         if( i >= MAX_DATA){
+            /* %04 ADD START */
+            strcpy(accntNoMaxDataFlg, FLG_ON);
+            /* %04 ADD END */
             break;
         }
 
@@ -1240,6 +1270,9 @@ static int getGaika( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
     {
         /* 配列の最大件数を超えた場合は処理を終了する */
         if( i >= MAX_DATA){
+            /* %04 ADD START */
+            strcpy(accntNoMaxDataFlg, FLG_ON);
+            /* %04 ADD END */
             break;
         }
 
@@ -1373,12 +1406,17 @@ static int getToshin( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
         //strcat(sqlcmd_local, h_TBMoushikomiten);    
         //strcat(sqlcmd_local, "' "); 
         /* %03 MOD END */
-        strcat(sqlcmd_local, "OR ( 店番 IN ( ");
-        strcat(sqlcmd_local, BANK_SHITEN);
-        strcat(sqlcmd_local, " ) ");
-        strcat(sqlcmd_local, "AND 口座開設年月日 >= ");
+        /* %04 MOD START */
+        /* strcat(sqlcmd_local, "OR ( 店番 IN ( "); */
+        /* strcat(sqlcmd_local, BANK_SHITEN); */
+        /* strcat(sqlcmd_local, " ) "); */
+        /* strcat(sqlcmd_local, "AND 口座開設年月日 >= "); */
+        /* strcat(sqlcmd_local, YAKKAN_DATE); */
+        /* strcat(sqlcmd_local, " ) ) "); */
+        strcat(sqlcmd_local, "OR 口座開設年月日 >= ");
         strcat(sqlcmd_local, YAKKAN_DATE);
-        strcat(sqlcmd_local, " ) ) ");
+        strcat(sqlcmd_local, " ) ");
+        /* %04 MOD END */
     }
     strcat(sqlcmd_local, "AND 科目ID = '");
     strcat(sqlcmd_local, KAMOKU_FUTSU_TOSHIN);
@@ -1432,6 +1470,9 @@ static int getToshin( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
     {
         /* 配列の最大件数を超えた場合は処理を終了する */
         if( i >= MAX_DATA){
+            /* %04 ADD START */
+            strcpy(accntNoMaxDataFlg, FLG_ON);
+            /* %04 ADD END */
             break;
         }
 
@@ -1611,7 +1652,12 @@ static void chgAccntType( KOZA_DATA **data, int count_all )
 
                /* 登録対象外の場合 */ 
                else {
-               
+                   /* %04 ADD START */
+                   /* 登録対象外の場合はメッセージを出力する */
+                   sprintf( g_szDtlMsg, "【翌営業日連絡】登録対象外の科目IDです。店：%s、科目ID：%s、口座番号：%s"
+                       , data[i]->branch_id, data[i]->accnt_type, data[i]->accnt_no);
+                   send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+                   /* %04 ADD END */
                    /* 対象外フラグを立てる */
                    strcpy(data[i]->flg_not_ins, FLG_ON);
                }
@@ -1649,7 +1695,12 @@ static void chgAccntType( KOZA_DATA **data, int count_all )
 
                /* 登録対象外の場合 */ 
                else {
-               
+                   /* %04 ADD START */
+                   /* 登録対象外の場合はメッセージを出力する */
+                   sprintf( g_szDtlMsg, "【翌営業日連絡】登録対象外の科目IDです。店：%s、科目ID：%s、口座番号：%s"
+                       , data[i]->branch_id, data[i]->accnt_type, data[i]->accnt_no);
+                   send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+                   /* %04 ADD END */
                    /* 対象外フラグを立てる */
                    strcpy(data[i]->flg_not_ins, FLG_ON);
                }
@@ -1682,7 +1733,12 @@ static void chgAccntType( KOZA_DATA **data, int count_all )
 
            /* 登録対象外の場合 */ 
            else {
-           
+               /* %04 ADD START */
+               /* 登録対象外の場合はメッセージを出力する */
+               sprintf( g_szDtlMsg, "【翌営業日連絡】登録対象外の科目IDです。店：%s、科目ID：%s、口座番号：%s"
+                   , data[i]->branch_id, data[i]->accnt_type, data[i]->accnt_no);
+               send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+               /* %04 ADD END */
                /* 対象外フラグを立てる */
                strcpy(data[i]->flg_not_ins, FLG_ON);
            }
@@ -1690,7 +1746,12 @@ static void chgAccntType( KOZA_DATA **data, int count_all )
 
        /* 登録対象外の場合 */ 
        else {
-           
+           /* %04 ADD START */
+           /* 登録対象外の場合はメッセージを出力する */
+           sprintf( g_szDtlMsg, "【翌営業日連絡】登録対象外の科目IDです。店：%s、科目ID：%s、口座番号：%s"
+               , data[i]->branch_id, data[i]->accnt_type, data[i]->accnt_no);
+           send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+           /* %04 ADD END */
            /* 対象外フラグを立てる */
            strcpy(data[i]->flg_not_ins, FLG_ON);
        }
@@ -1857,6 +1918,11 @@ static int chkBeforeIns( KOZA_DATA *data, char *h_ContractorID, char *g_szDtlMsg
         AND 口座番号 = :h_AccntNo
         AND 科目ID = :h_AccntType
         AND 通貨ID = :h_TsukaRyakusyo
+        /* %04 ADD START */
+        AND 契約者番号 = :h_ContractorID
+        AND CIFNO  = :h_CIFNO
+        AND 口座種類ID = '00' 
+        /* %04 ADD END */
     ; 
    
     if( sqlca.sqlcode != 0 ) {
