@@ -35,6 +35,7 @@
 /*                              | (口座開設日2020/12/20以降のBANK支店を抽出)*/
 /*                              | 口座登録可能件数を20件から21件に修正      */
 /*                              | テレバン契約口座の存在チェック条件を修正  */
+/* %05 | 21/01/18 | A.Miyamoto  | 口座情報取得上限チェックの位置を変更      */
 /*==========================================================================*/
 /*---------------------------------------------------------------------------*/
 /* Standard include specification                                            */
@@ -877,13 +878,15 @@ static int getKoteisei( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
     i = data_count;
      while (1)
     {
+        /* %05 DEL START */ 
         /* 配列の最大件数を超えた場合は処理を終了する */
-        if( i >= MAX_DATA){
-            /* %04 ADD START */
-            strcpy(accntNoMaxDataFlg, FLG_ON);
-            /* %04 ADD END */
-            break;
-        }
+        //if( i >= MAX_DATA){
+        //    /* %04 ADD START */
+        //    strcpy(accntNoMaxDataFlg, FLG_ON);
+        //    /* %04 ADD END */
+        //    break;
+        //}
+        /* %05 DEL END */ 
 
         memset( h_BranchId,                 0x00, sizeof(h_BranchId) );
         memset( h_AccntType,                0x00, sizeof(h_AccntType) );
@@ -911,6 +914,13 @@ static int getKoteisei( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
                 send_err ( m$sql_statment, sqlca.sqlcode, "カーソル(CUR_KOTEISEI) FETCHエラー", NULL, NULL, G_STATION);
                 return NODATA;
             }
+            /* %05 ADD START */ 
+            /* 配列の最大件数を超えた場合は処理を終了する */
+            else if( i >= MAX_DATA){
+                strcpy(accntNoMaxDataFlg, FLG_ON);
+                break;
+            }
+            /* %05 ADD END */ 
                 
         strcpy(data[i]->branch_id, h_BranchId);
         strcpy(data[i]->accnt_type, h_AccntType);
@@ -1065,13 +1075,15 @@ static int getRyudosei( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
     
      while (1)
     {
+        /* %05 DEL START */ 
         /* 配列の最大件数を超えた場合は処理を終了する */
-        if( i >= MAX_DATA){
-            /* %04 ADD START */
-            strcpy(accntNoMaxDataFlg, FLG_ON);
-            /* %04 ADD END */
-            break;
-        }
+        //if( i >= MAX_DATA){
+        //    /* %04 ADD START */
+        //    strcpy(accntNoMaxDataFlg, FLG_ON);
+        //    /* %04 ADD END */
+        //    break;
+        //}
+        /* %05 DEL END */ 
 
         memset( h_BranchId,                 0x00, sizeof(h_BranchId) );
         memset( h_AccntType,                0x00, sizeof(h_AccntType) );
@@ -1097,7 +1109,12 @@ static int getRyudosei( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
             send_err ( m$sql_statment, sqlca.sqlcode, "カーソル(CUR_RYUDOSEI) FETCHエラー", NULL, NULL, G_STATION);
             return NODATA;
         }
-        
+        /* %05 ADD START */
+        else if( i >= MAX_DATA){
+            strcpy(accntNoMaxDataFlg, FLG_ON);
+            break;
+        }
+        /* %05 ADD END */ 
         strcpy(data[i]->branch_id, h_BranchId);
         strcpy(data[i]->accnt_type, h_AccntType);
         strcpy(data[i]->accnt_no, h_AccntNo);
@@ -1268,13 +1285,15 @@ static int getGaika( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
     
      while (1)
     {
+        /* %05 DEL START */ 
         /* 配列の最大件数を超えた場合は処理を終了する */
-        if( i >= MAX_DATA){
-            /* %04 ADD START */
-            strcpy(accntNoMaxDataFlg, FLG_ON);
-            /* %04 ADD END */
-            break;
-        }
+        //if( i >= MAX_DATA){
+        //    /* %04 ADD START */
+        //    strcpy(accntNoMaxDataFlg, FLG_ON);
+        //    /* %04 ADD END */
+        //    break;
+        //}
+        /* %05 DEL END */ 
 
         memset( h_BranchId,                 0x00, sizeof(h_BranchId) );
         memset( h_AccntType,                0x00, sizeof(h_AccntType) );
@@ -1300,6 +1319,13 @@ static int getGaika( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
             send_err ( m$sql_statment, sqlca.sqlcode, "カーソル(CUR_GAIKA) FETCHエラー", NULL, NULL, G_STATION);
             return NODATA;
         }
+        /* %05 ADD START */ 
+        /* 配列の最大件数を超えた場合は処理を終了する */
+        else if( i >= MAX_DATA){
+            strcpy(accntNoMaxDataFlg, FLG_ON);
+            break;
+        }
+        /* %05 ADD END */ 
         
         strcpy(data[i]->branch_id, h_BranchId);
         strcpy(data[i]->accnt_type, h_AccntType);
@@ -1468,13 +1494,15 @@ static int getToshin( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
     
      while (1)
     {
+        /* %05 DEL START */ 
         /* 配列の最大件数を超えた場合は処理を終了する */
-        if( i >= MAX_DATA){
-            /* %04 ADD START */
-            strcpy(accntNoMaxDataFlg, FLG_ON);
-            /* %04 ADD END */
-            break;
-        }
+        //if( i >= MAX_DATA){
+        //    /* %04 ADD START */
+        //    strcpy(accntNoMaxDataFlg, FLG_ON);
+        //    /* %04 ADD END */
+        //    break;
+        //}
+        /* %05 DEL END */ 
 
         memset( h_BranchId,                 0x00, sizeof(h_BranchId) );
         memset( h_AccntType,                0x00, sizeof(h_AccntType) );
@@ -1498,6 +1526,13 @@ static int getToshin( KOZA_DATA **data, int data_count, char *g_szDtlMsg )
             send_err ( m$sql_statment, sqlca.sqlcode, "カーソル(CUR_TOUSHIN) FETCHエラー", NULL, NULL, G_STATION);
             return NODATA;
         }
+        /* %05 ADD START */ 
+        /* 配列の最大件数を超えた場合は処理を終了する */
+        else if( i >= MAX_DATA){
+            strcpy(accntNoMaxDataFlg, FLG_ON);
+            break;
+        }
+        /* %05 ADD END */ 
         
         /* 生年月日と口座開設年月日から年齢を算出し、 
         ** 20歳以上の場合は利用口座の登録対象のため、
