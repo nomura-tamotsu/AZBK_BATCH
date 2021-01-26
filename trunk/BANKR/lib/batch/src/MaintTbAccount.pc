@@ -36,6 +36,7 @@
 /*                              | ŒûÀ“o˜^‰Â”\Œ”‚ð20Œ‚©‚ç21Œ‚ÉC³      */
 /*                              | ƒeƒŒƒoƒ“Œ_–ñŒûÀ‚Ì‘¶Ýƒ`ƒFƒbƒNðŒ‚ðC³  */
 /* %05 | 21/01/18 | A.Miyamoto  | ŒûÀî•ñŽæ“¾ãŒÀƒ`ƒFƒbƒN‚ÌˆÊ’u‚ð•ÏX      */
+/* %06 | 21/01/21 | A.Miyamoto  | ‰È–Ú•ÏŠ·‘ÎÛŠO‚ÌƒƒbƒZ[ƒWo—Í”pŽ~        */
 /*==========================================================================*/
 /*---------------------------------------------------------------------------*/
 /* Standard include specification                                            */
@@ -1687,12 +1688,14 @@ static void chgAccntType( KOZA_DATA **data, int count_all )
 
                /* “o˜^‘ÎÛŠO‚Ìê‡ */ 
                else {
+				   /* %06 DELETE START */
                    /* %04 ADD START */
                    /* “o˜^‘ÎÛŠO‚Ìê‡‚ÍƒƒbƒZ[ƒW‚ðo—Í‚·‚é */
-                   sprintf( g_szDtlMsg, "y—‚‰c‹Æ“ú˜A—z“o˜^‘ÎÛŠO‚Ì‰È–ÚID‚Å‚·B“XF%sA‰È–ÚIDF%sAŒûÀ”Ô†F%s"
-                       , data[i]->branch_id, data[i]->accnt_type, data[i]->accnt_no);
-                   send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+                   //sprintf( g_szDtlMsg, "y—‚‰c‹Æ“ú˜A—z“o˜^‘ÎÛŠO‚Ì‰È–ÚID‚Å‚·B“XF%sA‰È–ÚIDF%sAŒûÀ”Ô†F%s"
+                   //    , data[i]->branch_id, data[i]->accnt_type, data[i]->accnt_no);
+                   //send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
                    /* %04 ADD END */
+				   /* %06 DELETE END */
                    /* ‘ÎÛŠOƒtƒ‰ƒO‚ð—§‚Ä‚é */
                    strcpy(data[i]->flg_not_ins, FLG_ON);
                }
@@ -1730,12 +1733,14 @@ static void chgAccntType( KOZA_DATA **data, int count_all )
 
                /* “o˜^‘ÎÛŠO‚Ìê‡ */ 
                else {
+				   /* %06 DELETE START */
                    /* %04 ADD START */
                    /* “o˜^‘ÎÛŠO‚Ìê‡‚ÍƒƒbƒZ[ƒW‚ðo—Í‚·‚é */
-                   sprintf( g_szDtlMsg, "y—‚‰c‹Æ“ú˜A—z“o˜^‘ÎÛŠO‚Ì‰È–ÚID‚Å‚·B“XF%sA‰È–ÚIDF%sAŒûÀ”Ô†F%s"
-                       , data[i]->branch_id, data[i]->accnt_type, data[i]->accnt_no);
-                   send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+                   //sprintf( g_szDtlMsg, "y—‚‰c‹Æ“ú˜A—z“o˜^‘ÎÛŠO‚Ì‰È–ÚID‚Å‚·B“XF%sA‰È–ÚIDF%sAŒûÀ”Ô†F%s"
+                   //    , data[i]->branch_id, data[i]->accnt_type, data[i]->accnt_no);
+                   //send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
                    /* %04 ADD END */
+				   /* %06 DELETE END */
                    /* ‘ÎÛŠOƒtƒ‰ƒO‚ð—§‚Ä‚é */
                    strcpy(data[i]->flg_not_ins, FLG_ON);
                }
@@ -1768,12 +1773,14 @@ static void chgAccntType( KOZA_DATA **data, int count_all )
 
            /* “o˜^‘ÎÛŠO‚Ìê‡ */ 
            else {
+               /* %06 DELETE START */
                /* %04 ADD START */
                /* “o˜^‘ÎÛŠO‚Ìê‡‚ÍƒƒbƒZ[ƒW‚ðo—Í‚·‚é */
-               sprintf( g_szDtlMsg, "y—‚‰c‹Æ“ú˜A—z“o˜^‘ÎÛŠO‚Ì‰È–ÚID‚Å‚·B“XF%sA‰È–ÚIDF%sAŒûÀ”Ô†F%s"
-                   , data[i]->branch_id, data[i]->accnt_type, data[i]->accnt_no);
-               send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+               //sprintf( g_szDtlMsg, "y—‚‰c‹Æ“ú˜A—z“o˜^‘ÎÛŠO‚Ì‰È–ÚID‚Å‚·B“XF%sA‰È–ÚIDF%sAŒûÀ”Ô†F%s"
+               //    , data[i]->branch_id, data[i]->accnt_type, data[i]->accnt_no);
+               //send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
                /* %04 ADD END */
+			   /* %06 DELETE END */
                /* ‘ÎÛŠOƒtƒ‰ƒO‚ð—§‚Ä‚é */
                strcpy(data[i]->flg_not_ins, FLG_ON);
            }
@@ -1781,12 +1788,14 @@ static void chgAccntType( KOZA_DATA **data, int count_all )
 
        /* “o˜^‘ÎÛŠO‚Ìê‡ */ 
        else {
+		   /* %06 DELETE START */
            /* %04 ADD START */
            /* “o˜^‘ÎÛŠO‚Ìê‡‚ÍƒƒbƒZ[ƒW‚ðo—Í‚·‚é */
-           sprintf( g_szDtlMsg, "y—‚‰c‹Æ“ú˜A—z“o˜^‘ÎÛŠO‚Ì‰È–ÚID‚Å‚·B“XF%sA‰È–ÚIDF%sAŒûÀ”Ô†F%s"
-               , data[i]->branch_id, data[i]->accnt_type, data[i]->accnt_no);
-           send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
+           //sprintf( g_szDtlMsg, "y—‚‰c‹Æ“ú˜A—z“o˜^‘ÎÛŠO‚Ì‰È–ÚID‚Å‚·B“XF%sA‰È–ÚIDF%sAŒûÀ”Ô†F%s"
+           //    , data[i]->branch_id, data[i]->accnt_type, data[i]->accnt_no);
+           //send_err ( m$emb_error, -1, g_szDtlMsg, NULL, NULL, G_STATION);
            /* %04 ADD END */
+		   /* %06 DELETE END */
            /* ‘ÎÛŠOƒtƒ‰ƒO‚ð—§‚Ä‚é */
            strcpy(data[i]->flg_not_ins, FLG_ON);
        }
