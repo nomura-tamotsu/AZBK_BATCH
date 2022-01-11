@@ -37,6 +37,7 @@
 /*                              | テレバン契約口座の存在チェック条件を修正  */
 /* %05 | 21/01/18 | A.Miyamoto  | 口座情報取得上限チェックの位置を変更      */
 /* %06 | 21/01/21 | A.Miyamoto  | 科目変換対象外のメッセージ出力廃止        */
+/* %07 | 21/12/13 | A.Miyamoto  | 成人年齢引き下げ対応 20歳→18歳           */
 /*==========================================================================*/
 /*---------------------------------------------------------------------------*/
 /* Standard include specification                                            */
@@ -2500,8 +2501,10 @@ static int chkDateOfBirth( char *start_date )
     //    ; 
     //age = ( time_now - atoi(h_DateOfBirth) ) / 10000;
     age = ( atoi(start_date) - atoi(h_DateOfBirth) ) / 10000;
-    
-    if(age < 20){
+    /* %07 MOD START */
+    //if(age < 20){
+    if(age < 18){
+    /* %07 MOD END */
         return FALSE;
     }
     return TRUE;
