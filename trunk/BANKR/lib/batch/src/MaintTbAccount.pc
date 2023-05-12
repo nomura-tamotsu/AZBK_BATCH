@@ -38,6 +38,7 @@
 /* %05 | 21/01/18 | A.Miyamoto  | 口座情報取得上限チェックの位置を変更      */
 /* %06 | 21/01/21 | A.Miyamoto  | 科目変換対象外のメッセージ出力廃止        */
 /* %07 | 21/12/13 | A.Miyamoto  | 成人年齢引き下げ対応 20歳→18歳           */
+/* %08 | 23/03/15 | A.Miyamoto  | 処理時間短縮の為投信口座の取込を廃止      */
 /*==========================================================================*/
 /*---------------------------------------------------------------------------*/
 /* Standard include specification                                            */
@@ -492,16 +493,17 @@ int main( int argc, char *argv[] )
         }
         count_line += rc;
                 
+		/* %08 DEL START */
         /* TF_個別明細投信口座から契約口座情報を取得する */
-        
-        rc = getToshin( pData, count_line,  g_szDtlMsg );
-        if ( rc == -1 ){
-            /* メモリ開放 */
-            memoryFree( dData, pData, MAX_DATA );
+        //rc = getToshin( pData, count_line,  g_szDtlMsg );
+        //if ( rc == -1 ){
+        //    /* メモリ開放 */
+        //    memoryFree( dData, pData, MAX_DATA );
             
-            continue;
-        }
-        count_line += rc;
+        //    continue;
+        //}
+        //count_line += rc;
+        /* %08 DEL END */
                 
         /* %04 ADD START */
         /* 口座情報取得件数が51件以上ある場合はメッセージを出力する */
