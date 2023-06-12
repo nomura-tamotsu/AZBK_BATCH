@@ -14,6 +14,7 @@
 # %01 | 17/02/01 | R.YAMANO      | 保守対応-ログメンテナンス機能改善対応
 # %02 | 18/12/05 | K.TAKEICHI    | NASストレージ更改対応
 # %03 | 20/07/22 | A.MIYAMOTO    | 本人確認資料保管対応
+# %04 | 23/06/05 | T.TOMINAGA    | クラススタがLKに変更なり対応（155行目～177行目）
 #============================================================================
 #
 # ディレクトリ定義
@@ -150,14 +151,29 @@ ${global:COM_EVENT_CKDATE_FILE} = "${UNYO_WRK_DIR}\CKDate_EventLog.flg"
 # CLUSTER INFO
 #----------------------------------------------------------------------
 # CLUSTER VIRTUAL HOST (SERVICE HOST)
-${global:COM_DBSV_VHOST}  = "fcctbsdbpw01"
-# MSFC Cluster Resorce Group
-${global:COM_CLST_RSGP01} = "FCCTBSDBPW01"
-${global:COM_CLST_FCOUNT} = 120
-# 処理待機時間(秒)
-${global:COM_CLWT_TIME}   = 10
-# ループ処理回数
-${global:COM_CLRP_CNTS}   = 18
+${global:COM_DBSV_VHOST1}  = "fcctbsdbpw11"
+${global:COM_DBSV_VHOST2}  = "fcctbsdbpw11cls"
+${global:COM_DBSV_VHOST3}  = "fcctbsdbpw11bex"
+# DB NODE
+${global:COM_CLST_PRI_HOST} = "FCCTBSDBPW11A"
+${global:COM_CLST_ALT_HOST} = "FCCTBSDBPW11B"
+# LK COMM-PATH
+${global:DB_LK_PRI_COMIP1} = "192.168.243.5"
+${global:DB_LK_PRI_COMIP2} = "192.168.243.9"
+${global:DB_LK_ALT_COMIP1} = "192.168.243.6"
+${global:DB_LK_ALT_COMIP2} = "192.168.243.10"
+#LK Comand
+${global:DB_LK_CHECK_PATH} = "D:\LK\BIN\net_list"
+${global:DB_LK_CHECK_AWK} = "D:\LK\BIN\awk"
+${global:DB_LK_CHECK_SYSGET} = "D:\LK\BIN\sys_getst"
+${global:DB_LK_CHECK_RESOURCE} = "D:\LK\BIN\ins_list"
+${global:DB_LK_FAILOVER_EXEC} = "D:\LK\BIN\lcdremexec"
+${global:DB_LK_FAILOVER_ACTION} = "D:\LK\BIN\perform_action"
+# LK TOP-RESOURCE
+${global:DB_LK_RESOURCE1} = "BRCCAZBK"
+${global:DB_LK_RESOURCE2} = "BRCCTRNGx"
+${global:DB_LK_RESOURCE3} = "fcctbsdbpw11bes"
+${global:DB_LK_RESOURCE4} = "fcctbsdbpw11cl"
 
 #----------------------------------------------------------------------
 # NAS Strage INFO
@@ -209,6 +225,6 @@ ${global:COM_FULLBKUP_FLAG} = "DB_Backup-Full_END.flg"
 # WAS BASE
 ${global:COM_WAS_BASE_DIRS} = "D:\Product\IBM\WebSphere\AppServer"
 ${global:COM_WAS_BASE_URLS} = "D:/Product/IBM\WebSphere/AppServer"
-# Java 1.7 
+# Java 1.7
 ${global:COM_WAS_CMND_JAVA} = "${COM_WAS_BASE_DIRS}\java_1.7_64\bin\java"
 
