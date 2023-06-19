@@ -16,6 +16,7 @@
 #-----+----------+---------------+-------------------------------------------
 # %00 | 14/03/14 | R.YAMANO      | First Eddition
 # %01 | 17/01/30 | R.YAMANO      | 保守対応-ログメンテナンス機能改善対応
+# %02 | 23/05/19 | ISIDIT DOI    | アプリ基盤更改 Ora監査ログ圧縮対応
 #============================================================================
 #--------------------------------------------
 # Get Parameter Information
@@ -112,6 +113,23 @@ if ( ${RTN_CD00} -ne ${DEF_RTNCD_NML} ) {
 } else {
     FC_LogWriter ${DEF_RTNCD_NML} "${LC_EXECUTE_MSG}処理を終了します。"
 }
+
+# %02 ADD START
+#--------------------------------------------
+# 処理5.ログファイルZIP圧縮処理
+#--------------------------------------------
+${LC_EXECUTE_MSG} = "ログファイルZIP圧縮処理"
+${LC_EXECUTE_PGM} = "uy_zip_log_file.ps1"
+FC_LogWriter ${DEF_RTNCD_NML} "${LC_EXECUTE_MSG}処理を実施します。"
+${RTN_COMMAND00} = Start-Process powershell.exe "${UNYO_MOD_DIR}\${LC_EXECUTE_PGM} ${LCOPTION}" -PassThru -Wait -WindowStyle  Hidden
+${RTN_CD00} = ${RTN_COMMAND00}.ExitCode
+${RTN_COMMAND00}.Close()
+if ( ${RTN_CD00} -ne ${DEF_RTNCD_NML} ) {
+    LFC_AbnormalEndProcess
+} else {
+    FC_LogWriter ${DEF_RTNCD_NML} "${LC_EXECUTE_MSG}処理を終了します。"
+}
+# %02 ADD END
 
 #--------------------------------------------
 # 処理3.監査ログバックアップ処理
