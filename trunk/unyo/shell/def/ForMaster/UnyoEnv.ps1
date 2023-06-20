@@ -15,6 +15,7 @@
 # %02 | 18/12/05 | K.TAKEICHI    | NASストレージ更改対応
 # %03 | 20/07/22 | A.MIYAMOTO    | 本人確認資料保管対応
 # %04 | 23/06/05 | T.TOMINAGA    | クラススタがLKに変更なり対応（155行目～177行目）
+# %05 | 23/06/20 | T.TOMINAGA    | 研修DB対応のためLKリソースに変更があったため変更（177、178行目）
 #============================================================================
 #
 # ディレクトリ定義
@@ -171,9 +172,9 @@ ${global:DB_LK_FAILOVER_EXEC} = "D:\LK\BIN\lcdremexec"
 ${global:DB_LK_FAILOVER_ACTION} = "D:\LK\BIN\perform_action"
 # LK TOP-RESOURCE
 ${global:DB_LK_RESOURCE1} = "BRCCAZBK"
-${global:DB_LK_RESOURCE2} = "BRCCTRNGx"
-${global:DB_LK_RESOURCE3} = "fcctbsdbpw11bes"
-${global:DB_LK_RESOURCE4} = "fcctbsdbpw11cl"
+${global:DB_LK_RESOURCE2} = "BRCCTRNG"
+${global:DB_LK_RESOURCE3} = "fcctbsdbpw11bex"
+${global:DB_LK_RESOURCE4} = "fcctbsdbpw11cls"
 
 #----------------------------------------------------------------------
 # NAS Strage INFO
