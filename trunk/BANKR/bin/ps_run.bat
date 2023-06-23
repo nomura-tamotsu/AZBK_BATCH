@@ -20,6 +20,7 @@ rem -----+----------+---------------+-------------------------------------------
 rem  %00 | 14/05/14 | ISID          | First Edition.
 rem  %01 | 15/01/19 | 土居 康一郎   | 1.0次対応 パス名を変更
 rem  %02 | 23/04/18 | 土居 康一郎   | shellの指定に-Fileを利用
+rem  %03 | 23/06/23 | 土居 康一郎   | 本番環境用に修正
 rem ============================================================================
 
 rem ============================================================================
@@ -34,14 +35,14 @@ setlocal
 rem ---------------------------------------
 rem  環境変数のセット
 rem ---------------------------------------
-call D:\azbk\BANKR\env\env_azbk.bat
+call E:\azbk\BANKRAZB\env\env_azbk.bat
 
 rem ---------------------------------------
 rem  起動用環境変数セット
 rem ---------------------------------------
 set POWERSHELL=C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe
 rem set EXIT_PROC=;exit $LASTEXITCODE
-set PS_PATH=D:\azbk\BANKR\ps\
+set PS_PATH=E:\azbk\BANKRAZB\ps\
 set SUFFIX=.ps1
 
 rem ---------------------------------------
