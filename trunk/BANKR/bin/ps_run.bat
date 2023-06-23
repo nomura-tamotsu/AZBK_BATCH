@@ -19,6 +19,7 @@ rem  Mod   yy/mm/dd   Coder           Comment
 rem -----+----------+---------------+-------------------------------------------
 rem  %00 | 14/05/14 | ISID          | First Edition.
 rem  %01 | 15/01/19 | 土居 康一郎   | 1.0次対応 パス名を変更
+rem  %02 | 23/04/18 | 土居 康一郎   | shellの指定に-Fileを利用
 rem ============================================================================
 
 rem ============================================================================
@@ -33,14 +34,14 @@ setlocal
 rem ---------------------------------------
 rem  環境変数のセット
 rem ---------------------------------------
-call E:\azbk\BANKRAZB\env\env_azbk.bat
+call D:\azbk\BANKR\env\env_azbk.bat
 
 rem ---------------------------------------
 rem  起動用環境変数セット
 rem ---------------------------------------
 set POWERSHELL=C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe
-set EXIT_PROC=;exit $LASTEXITCODE
-set PS_PATH=E:\azbk\BANKRAZB\ps\
+rem set EXIT_PROC=;exit $LASTEXITCODE
+set PS_PATH=D:\azbk\BANKR\ps\
 set SUFFIX=.ps1
 
 rem ---------------------------------------
@@ -74,13 +75,13 @@ set PGM_NAME=%PS_PATH%%PGM%%SUFFIX%
 rem ---------------------------------------
 rem  POWERSHELLからの起動
 rem ---------------------------------------
-set RUN_PGM=%POWERSHELL% %PGM_NAME% %MYPARM% %EXIT_PROC%
+set RUN_PGM=%POWERSHELL% -File %PGM_NAME% %MYPARM%
 
 rem echo %RUN_PGM%
 
 
 rem ============================================================================
-rem  プログラム実行(EXIT付き)
+rem  プログラム実行(EXITなし)
 rem ============================================================================
 call %RUN_PGM%
 
