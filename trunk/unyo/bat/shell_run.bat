@@ -18,6 +18,7 @@ rem
 rem  Mod   yy/mm/dd   Coder           Comment
 rem -----+----------+---------------+-------------------------------------------
 rem  %00 | 14/05/14 | ISID          | First Edition.
+rem  %01 | 23/06/23 | 土居 康一郎   | shellの指定に-Fileを利用(Shell起動エラー時検知のため)
 rem ============================================================================
 
 rem ============================================================================
@@ -36,7 +37,7 @@ rem ---------------------------------------
 rem  PowerShell 64 bit 
 rem ---------------------------------------
 set POWERSHELL=C:\Windows\syswow64\WindowsPowerShell\v1.0\powershell.exe
-set EXIT_PROC=;exit $LASTEXITCODE
+rem %01削除 set EXIT_PROC=;exit $LASTEXITCODE
 set PS_PATH=D:\azbk\unyo\shell\
 set SUFFIX=.ps1
 
@@ -71,7 +72,8 @@ set PGM_NAME=%PS_PATH%%PGM%%SUFFIX%
 rem ---------------------------------------
 rem  POWERSHELLからの起動
 rem ---------------------------------------
-set RUN_PGM=%POWERSHELL%%SPACE%%PGM_NAME%%SPACE%%MYPARM%%EXIT_PROC%
+rem %01 EDIT set RUN_PGM=%POWERSHELL%%SPACE%%PGM_NAME%%SPACE%%MYPARM%%EXIT_PROC%
+set RUN_PGM=%POWERSHELL%%SPACE%-File%SPACE%%PGM_NAME%%SPACE%%MYPARM%
 
 rem echo %RUN_PGM%
 
