@@ -12,6 +12,7 @@
 # %01 | 14/06/24 | ISID          | Error Code 追加
 # %02 | 15/01/14 | 土居　康一郎  | あおぞら銀行 1.0次対応
 # %03 | 19/07/29 | 武市  清嵩    | あおぞら銀行 休眠預金口座対応
+# %04 | 23/06/20 | ISIDIT 土居   | あおぞら銀行 不要コメント行削除
 #============================================================================
 
 # ============================================================================
@@ -46,27 +47,35 @@ $global:ORACLE_TNS=$env:oracle_tns
 # ============================================================================
 # クラスタログディレクトリ
 $global:CLLOG_DIR="E:\CLlog\azbk\BANKRAZB"
+
 # ログディレクトリ
 $global:LOG_DIR="$global:CLLOG_DIR\error"
+
 # スクリプトディレクトリ
 $global:SCRIPT_DIR="$global:EMB_HOME\ps"
+
 # 一時ファイルディレクトリ
 $global:TMP_DIR="$global:EMB_HOME\tmp"
+
 # レポートディレクトリ
 $global:REP_LOG_DIR="$global:LOG_DIR\report"
 $global:REP_BACKUP_DIR="$global:REP_LOG_DIR\backup"
 
+
 #外部ファイル送受信ルートディレクトリ
 $global:EXTDATA_DIR="E:\extdata"
+
 # 外部ファイル受信ディレクトリ
 $global:EXT_LOAD_DIR="$global:EXTDATA_DIR\rcv"
 $global:EXT_LOAD_BACKUP_DIR="$global:EXT_LOAD_DIR\backup"
+
 # 外部ファイル送信ディレクトリ
 $global:EXT_UPLOAD_DIR="$global:EXTDATA_DIR\snd"
 $global:EXT_UPLOAD_BACKUP_DIR="$global:EXT_UPLOAD_DIR\backup"
 
 # 制御ファイル格納ディレクトリ
 $global:CTL_FILE_DIR="$global:EMB_HOME\ctl"
+
 # ビューDDL格納ディレクトリ
 $global:VIEW_DDL_DIR="$global:EMB_HOME\table\view_switch"
 $global:VIEW_DDL_LOG_DIR="$global:VIEW_DDL_DIR\log"
@@ -77,14 +86,19 @@ $global:VIEW_DDL_LOG_DIR="$global:VIEW_DDL_DIR\log"
 # ============================================================================
 # プリンタ印刷フラグ
 $global:PRINT_FLAG="OFF"
+
 # プリンタドライバ
 $global:PRINT_DRIVER="PQA4"
+
 # バッチ処理レポート
 $global:BATCH_REP_FILE_NAME="BATCH_REPORT.log"
+
 # テーブルスペース空き容量レポート
 $global:TBL_SPACE_REP_FILE_NAME="TBL_SPACE_REPORT.log"
+
 # 月次データ受信レポート
 $global:MONTHLY_DATA_REP_FILE_NAME="MONTHLY_DATA_REPORT.log"
+
 
 # ============================================================================
 # メッセージID定義
@@ -125,15 +139,19 @@ $global:REP_MSG_E=2
 # 未取引先顧客ファイル
 $global:NO_DEAL_IMP_DATA="D_MITORIHIKI_IMP.dat"
 $global:NO_DEAL_IMP_COUNT="K_MITORIHIKI_IMP.dat"
+
 # 未取引先消込ファイル
 $global:NO_DEAL_CLR_DATA="D_MITORIHIKI_CLR.dat"
 $global:NO_DEAL_CLR_COUNT="K_MITORIHIKI_CLR.dat"
+
 # EBMコールデータファイル
 $global:EBM_DATA="D_EBM.dat"
 $global:EBM_COUNT="K_EBM.dat"
+
 # 未取引先抽出ファイル
 $global:NO_DEAL_EXP_DATA="D_MITORIHIKI_EXP.dat"
 $global:NO_DEAL_EXP_COUNT="K_MITORIHIKI_EXP.dat"
+
 
 # ============================================================================
 # HULFT送信定義
@@ -147,15 +165,19 @@ $global:FolderCRM="crm"
 $global:FolderHOST="host"
 $global:FolderIB="ib"
 
+
 # ============================================================================
 # 月次/週次/日次データ定義
 # ============================================================================
 # 月次配置完了ファイル(転送完了ファイル)
 $global:MONTHLY_END_FILE="$global:EXT_LOAD_DIR\M_END.dat"
+
 # 週次配置完了ファイル(転送完了ファイル)
 $global:WEEKLY_END_FILE="$global:EXT_LOAD_DIR\W_END.dat"
+
 # 日次配置完了ファイル(転送完了ファイル)
 $global:DAILY_END_FILE="$global:EXT_LOAD_DIR\D_END.dat"
+
 
 # 各データファイル名(拡張子なし)
 $global:M_END_BASE="M_END"
@@ -172,30 +194,15 @@ $global:M_CUSTOMER_BASE      ="D_ZKS"       # 顧客属性ファイル
 $global:M_HOUSEHOLD_BASE     ="D_SZS"       # 世帯属性ファイル
 $global:M_TERM_DEPOSIT_BASE    ="D_KKS"     # 定期性預金ファイル
 $global:M_LIQUID_DEPOSIT_BASE  ="D_KRS"     # 流動性預金ファイル
-# $global:M_DEBENTURE_BASE     ="D_KSS"     # 債券差分ファイル (1.0次にて 削除)
 $global:M_PERSONNEL_BASE     ="D_JIF"       # 人事情報ファイル
 $global:M_PROFILE_BASE       ="D_PRO"       # 顧客プロファイル
 $global:M_BHISTORY_BASE      ="D_LGD"       # 営業店コンタクト履歴ファイル
 $global:M_DACCOUNT_BASE      ="D_KYK"       # 休眠預金口座ファイル (休眠預金口座対応にて 追加)
 
 $global:M_OPEINFO_BASE       ="S_IB1"       # オペレータ情報ファイル
-# $global:M_CONTRACT_BASE      ="S_CZU"       # テレバン契約属性ファイル (1.0次にて 削除)
 $global:M_CONTACT_BASE       ="S_LCU"       # コンタクト履歴ファイル
 $global:M_TB_CONTRACT_BASE   ="S_TB1"       # テレバン契約情報ファイル (1.0次 追加)
 $global:M_TB_ACCOUNT_BASE    ="S_TB2"       # テレバン契約口座情報ファイル (1.0次 追加)
-
-
-# 未使用
-$global:M_K_ZOKUSEI_BASE="M_K_ZOKUSEI"
-$global:M_K_ZANDAKA_BASE="M_K_ZANDAKA"
-$global:M_K_HENDO_BASE="M_K_HENDO"
-$global:M_S_ZOKUSEI_BASE="M_S_ZOKUSEI"
-$global:M_S_ZANDAKA_BASE="M_S_ZANDAKA"
-$global:M_S_HENDO_BASE="M_S_HENDO"
-$global:M_M_RYUDO_BASE="M_M_RYUDO"
-$global:M_M_TEIKI_BASE="M_M_TEIKI"
-$global:M_M_LOAN_BASE="M_M_LOAN"
-
 
 
 # 各ビューDDL名(拡張子なし)
@@ -244,11 +251,6 @@ $global:FUND_DETAIL_VIEWNAME="TF_個別明細投信口座明細"
 $global:PRODUCT_VIEWNAME="TF_商品"
 $global:PROFILE_VIEWNAME ="TF_顧客プロファイル"
 
-# $global:CUTOMER_BASE_TBNAME   ="TF_顧客属性"   (1.0次 VIEWに変更)
-# $global:HOUSEHOLD_BASE_TBNAME ="TF_世帯属性"   (1.0次 VIEWに変更)
-# $global:TERM_DEPOSIT_BASE_TBNAME ="TF_個別明細固定性預金"    (1.0次 VIEWに変更)
-# $global:LIQUID_DEPOSIT_BASE_TBNAME ="TF_個別明細流動性預金"  (1.0次 VIEWに変更)
-# $global:DEBENTURE_BASE_TBNAME ="TF_個別明細債券" (1.0次 削除)
 $global:PERSONNEL_BASE_TBNAME ="TM_ユーザ"
 $global:PROFILE_BASE_TBNAME ="TF_顧客プロファイル"
 $global:BHISTROY_BASE_TBNAME ="TH_営業店履歴"
