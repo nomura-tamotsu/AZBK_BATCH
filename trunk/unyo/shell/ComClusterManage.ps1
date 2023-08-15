@@ -18,7 +18,7 @@
 # %01 | 23/06/05 | T.TOMINAGA    | WSFCモジュールの無効化【31行目】
 #     |          |               | LifeKeeperコミュニケーションパスの確認を処理を追加【40～68行目】
 #     |          |               | LifeKeeperリソースActive/Standbyの確認を処理を追加【78～99行目】
-#     |          |               | LifeKeeperリソースFailover/Failbackの処理を追加【112～233行目】
+# %02 | 23/08/14 | T.TOMINAGA    | JP1/HULFTリソース追加があったため対応（156行目）
 #============================================================================
 #----------------------------------------------------------------------#
 # ComSeviceManage for BANK*R CC  Ver.1.0.0                             #
@@ -152,7 +152,7 @@ function global:FC_MoveCluster
     #------------------------------------------------------------------#
     FC_LogWriter ${DEF_RTNCD_NML} "${PRG_NAME}(${FC_CLS_BASE_MSG})を実施します。"
     Write-Output "$((Get-Date).tostring('yyyy-MM-dd HH:mm:ss')) ${PRG_NAME}(${FC_CLS_BASE_MSG})を実施します。"
-    ${LK_TOP_RESOURCE} = @("${DB_LK_RESOURCE1}", "${DB_LK_RESOURCE2}", "${DB_LK_RESOURCE3}", "${DB_LK_RESOURCE4}")
+    ${LK_TOP_RESOURCE} = @("${DB_LK_RESOURCE1}", "${DB_LK_RESOURCE2}", "${DB_LK_RESOURCE3}", "${DB_LK_RESOURCE4}, "${DB_LK_RESOURCE5}")
     foreach( $str_LK in ${LK_TOP_RESOURCE}){
 
         ### LKリソース停止処理 ###

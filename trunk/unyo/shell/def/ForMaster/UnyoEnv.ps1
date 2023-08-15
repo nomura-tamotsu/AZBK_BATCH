@@ -17,6 +17,7 @@
 # %04 | 23/06/05 | T.TOMINAGA    | クラススタがLKに変更なり対応
 # %05 | 23/06/20 | T.TOMINAGA    | 研修DB対応のためLKリソースに変更があったため変更
 # %06 | 23/06/22 | K.Doi         | アプリ基盤対応（ZIP圧縮設定、不要部分削除）
+# %07 | 23/08/14 | T.TOMINAGA    | JP1/HULFTリソース追加とリソース移行順位に変更のため対応
 #============================================================================
 #
 # ディレクトリ定義
@@ -187,10 +188,12 @@ ${global:DB_LK_CHECK_RESOURCE} = "D:\LK\BIN\ins_list"
 ${global:DB_LK_FAILOVER_EXEC} = "D:\LK\BIN\lcdremexec"
 ${global:DB_LK_FAILOVER_ACTION} = "D:\LK\BIN\perform_action"
 # LK TOP-RESOURCE
-${global:DB_LK_RESOURCE1} = "BRCCAZBK"
-${global:DB_LK_RESOURCE2} = "BRCCTRNG"
-${global:DB_LK_RESOURCE3} = "fcctbsdbpw11bex"
-${global:DB_LK_RESOURCE4} = "fcctbsdbpw11cls"
+# リソース移行する順位(1が最初)
+${global:DB_LK_RESOURCE1} = "lkjp1_ajsagt"
+${global:DB_LK_RESOURCE2} = "BRCCAZBK"
+${global:DB_LK_RESOURCE3} = "BRCCTRNG"
+${global:DB_LK_RESOURCE4} = "fcctbsdbpw11bex"
+${global:DB_LK_RESOURCE5} = "fcctbsdbpw11cls"
 
 #----------------------------------------------------------------------
 # NAS Strage INFO
