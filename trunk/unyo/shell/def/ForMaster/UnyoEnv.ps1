@@ -18,6 +18,7 @@
 # %05 | 23/06/20 | T.TOMINAGA    | 研修DB対応のためLKリソースに変更があったため変更
 # %06 | 23/06/22 | K.Doi         | アプリ基盤対応（ZIP圧縮設定、不要部分削除）
 # %07 | 23/08/14 | T.TOMINAGA    | JP1/HULFTリソース追加とリソース移行順位に変更のため対応
+# %08 | 23/12/11 | A.MIYAMOTO    | DBバックアップNAS転送用のホスト名を追加（COM_DBSV_VHOST）
 #============================================================================
 #
 # ディレクトリ定義
@@ -169,6 +170,7 @@ ${global:COM_EVENT_CKDATE_FILE} = "${UNYO_WRK_DIR}\CKDate_EventLog.flg"
 # CLUSTER INFO %04、%05 Edit
 #----------------------------------------------------------------------
 # CLUSTER VIRTUAL HOST (SERVICE HOST)
+${global:COM_DBSV_VHOST}   = "fcctbsdbpw11"
 ${global:COM_DBSV_VHOST1}  = "fcctbsdbpw11"
 ${global:COM_DBSV_VHOST2}  = "fcctbsdbpw11cls"
 ${global:COM_DBSV_VHOST3}  = "fcctbsdbpw11bex"
