@@ -15,6 +15,7 @@
 # Mod   yy/mm/dd   Coder           Comment
 #-----+----------+---------------+-------------------------------------------
 # %00 | 20/07/13 | A.MIYAMOTO      | First Eddition
+# %01 | 24/04/17 | A.MIYAMOTO      | NAS登録時のエラーレベルをinformationに変更
 #============================================================================
 #--------------------------------------------
 # Get Parameter Information
@@ -70,8 +71,11 @@ function LFC_NasDirExistCheckProcess
 	if (!(Test-Path ${LOCAL_NAS_IMAGE_DIR})) {
 		if (${PRM_ShoriKbn} -eq "regist") {
 			# NAS→ローカル一時フォルダ登録時
-			${PRG_EXIT_CODE} = ${DEF_RTNCD_ERR}
-			outmsg 55 ${PRG_EXIT_CODE} "本人確認資料の保存先NAS[${LOCAL_NAS_IMAGE_DIR}]が参照できなかったためファイルを一時フォルダへ退避します。"
+			# %01 20240417　保守課題対応　START
+			#${PRG_EXIT_CODE} = ${DEF_RTNCD_ERR}
+			#outmsg 55 ${PRG_EXIT_CODE} "本人確認資料の保存先NAS[${LOCAL_NAS_IMAGE_DIR}]が参照できなかったためファイルを一時フォルダへ退避します。"
+			outmsg 1 ${PRG_EXIT_CODE} "本人確認資料の保存先NAS[${LOCAL_NAS_IMAGE_DIR}]が参照できなかったためファイルを一時フォルダへ退避します。"
+			# %01 20240417　保守課題対応　END
 			FC_LogWriter 1 "本人確認資料の保存先NAS[${LOCAL_NAS_IMAGE_DIR}]が参照できなかったためファイルを一時フォルダへ退避します。"
 			# NASへの転送失敗時処理
 			LFC_NasTransferFailureProcess
@@ -114,10 +118,16 @@ function LFC_NasDirExistCheckProcess
 					}
 				}
 				if (!(${ERR_CODE})) {
-					${PRG_EXIT_CODE} = ${DEF_RTNCD_ERR}
-					outmsg 55 ${PRG_EXIT_CODE} "本人確認資料の保存先ディレクトリ[${script:LOCAL_OUT_DIR}]の作成に失敗した為異常終了します。"
-					FC_LogWriter 1 "本人確認資料の保存先ディレクトリ[${script:LOCAL_OUT_DIR}]の作成に失敗した為異常終了します。"
-					EndProcess
+					# %01 20240417　保守課題対応　START
+					#${PRG_EXIT_CODE} = ${DEF_RTNCD_ERR}
+					#outmsg 55 ${PRG_EXIT_CODE} "本人確認資料の保存先ディレクトリ[${script:LOCAL_OUT_DIR}]の作成に失敗した為異常終了します。"
+					#FC_LogWriter 1 "本人確認資料の保存先ディレクトリ[${script:LOCAL_OUT_DIR}]の作成に失敗した為異常終了します。"
+					#EndProcess
+					outmsg 1 ${PRG_EXIT_CODE} "本人確認資料の保存先ディレクトリ[${LOCAL_OUT_DIR}]の作成に失敗した為、ファイルを一時フォルダへ退避します。"
+					FC_LogWriter 1 "本人確認資料の保存先ディレクトリ[${LOCAL_OUT_DIR}]の作成に失敗した為、ファイルを一時フォルダへ退避します。"
+					# NASへの転送失敗時処理
+					LFC_NasTransferFailureProcess
+					# %01 20240417　保守課題対応　END
 				}
 			}
 		}
@@ -240,12 +250,20 @@ function LFC_NasLocalFileCopyProcess  ( [boolean] ${LOCAL_EVACUATION_FLG} )
 	}
 	if (!(${ERR_CODE})) {
 		if (${PRM_ShoriKbn} -eq "regist" -and ${LOCAL_EVACUATION_FLG} ) {
-			${PRG_EXIT_CODE} = ${DEF_RTNCD_ERR}
+			# %01 20240417　保守課題対応　START
+			#${PRG_EXIT_CODE} = ${DEF_RTNCD_ERR}
+			# %01 20240417　保守課題対応　END
 			if (${PRM_FileName_2} -ne "x") {
-				outmsg 55 ${PRG_EXIT_CODE} "本人確認資料ファイル[${script:LOCAL_IN_FILE1}][${script:LOCAL_IN_FILE2}]のNAS転送に失敗した為ファイルを一時フォルダへ退避します。"
+				# %01 20240417　保守課題対応　START
+				#outmsg 55 ${PRG_EXIT_CODE} "本人確認資料ファイル[${script:LOCAL_IN_FILE1}][${script:LOCAL_IN_FILE2}]のNAS転送に失敗した為ファイルを一時フォルダへ退避します。"
+				outmsg 1 ${PRG_EXIT_CODE} "本人確認資料ファイル[${script:LOCAL_IN_FILE1}][${script:LOCAL_IN_FILE2}]のNAS転送に失敗した為ファイルを一時フォルダへ退避します。"
+				# %01 20240417　保守課題対応　END
 				FC_LogWriter 1 "本人確認資料ファイル[${script:LOCAL_IN_FILE1}][${script:LOCAL_IN_FILE2}]のNAS転送に失敗した為ファイルを一時フォルダへ退避します。"
 			} else {
-				outmsg 55 ${PRG_EXIT_CODE} "本人確認資料ファイル[${script:LOCAL_IN_FILE1}]のNAS転送に失敗した為ファイルを一時フォルダへ退避します。"
+				# %01 20240417　保守課題対応　START
+				#outmsg 55 ${PRG_EXIT_CODE} "本人確認資料ファイル[${script:LOCAL_IN_FILE1}]のNAS転送に失敗した為ファイルを一時フォルダへ退避します。"
+				outmsg 1 ${PRG_EXIT_CODE} "本人確認資料ファイル[${script:LOCAL_IN_FILE1}]のNAS転送に失敗した為ファイルを一時フォルダへ退避します。"
+				# %01 20240417　保守課題対応　END
 				FC_LogWriter 1 "本人確認資料ファイル[${script:LOCAL_IN_FILE1}]のNAS転送に失敗した為ファイルを一時フォルダへ退避します。"
 			}
 			# NASへの転送失敗時処理
@@ -346,12 +364,20 @@ function LFC_NasTransferFailureProcess
 	# 転送対象ファイル削除処理（regist処理のみ）
 	LFC_InFileDeleteProcess
 	
-	${PRG_EXIT_CODE} = ${DEF_RTNCD_ERR}
+	# %01 20240417　保守課題対応　START
+	#${PRG_EXIT_CODE} = ${DEF_RTNCD_ERR}
+	# %01 20240417　保守課題対応　END
 	if (${PRM_FileName_2} -ne "x") {
-		outmsg 55 ${PRG_EXIT_CODE} "本人確認資料ファイル[${script:LOCAL_IN_FILE1}][${script:LOCAL_IN_FILE2}]のNAS転送に失敗した為ファイルを一時フォルダ[${script:LOCAL_OUT_DIR}]へ退避しました。"
+		# %01 20240417　保守課題対応　START
+		#outmsg 55 ${PRG_EXIT_CODE} "本人確認資料ファイル[${script:LOCAL_IN_FILE1}][${script:LOCAL_IN_FILE2}]のNAS転送に失敗した為ファイルを一時フォルダ[${script:LOCAL_OUT_DIR}]へ退避しました。"
+		outmsg 1 ${PRG_EXIT_CODE} "本人確認資料ファイル[${script:LOCAL_IN_FILE1}][${script:LOCAL_IN_FILE2}]のNAS転送に失敗した為ファイルを一時フォルダ[${script:LOCAL_OUT_DIR}]へ退避しました。"
+		# %01 20240417　保守課題対応　END
 		FC_LogWriter 1 "本人確認資料ファイル[${script:LOCAL_IN_FILE1}][${script:LOCAL_IN_FILE2}]のNAS転送に失敗した為ファイルを一時フォルダ[${script:LOCAL_OUT_DIR}]へ退避しました。"
 	} else {
-		outmsg 55 ${PRG_EXIT_CODE} "本人確認資料ファイル[${script:LOCAL_IN_FILE1}]のNAS転送に失敗した為ファイルを一時フォルダ[${script:LOCAL_OUT_DIR}]へ退避しました。"
+		# %01 20240417　保守課題対応　START
+		#outmsg 55 ${PRG_EXIT_CODE} "本人確認資料ファイル[${script:LOCAL_IN_FILE1}]のNAS転送に失敗した為ファイルを一時フォルダ[${script:LOCAL_OUT_DIR}]へ退避しました。"
+		outmsg 1 ${PRG_EXIT_CODE} "本人確認資料ファイル[${script:LOCAL_IN_FILE1}]のNAS転送に失敗した為ファイルを一時フォルダ[${script:LOCAL_OUT_DIR}]へ退避しました。"
+		# %01 20240417　保守課題対応　END
 		FC_LogWriter 1 "本人確認資料ファイル[${script:LOCAL_IN_FILE1}]のNAS転送に失敗した為ファイルを一時フォルダ[${script:LOCAL_OUT_DIR}]へ退避しました。"
 	}
 	EndProcess
